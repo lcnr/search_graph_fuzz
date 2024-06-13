@@ -1,0 +1,8 @@
+[package]
+name = "search_graph_fuzz"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustc_search_graph = { path = "../rust1/compiler/rustc_search_graph" }
+rand = { version = "0.8", features = ["small_rng"] }
