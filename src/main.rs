@@ -1,8 +1,8 @@
-use core::num;
 use rand::rngs::SmallRng;
 use rand::{thread_rng, Rng, SeedableRng};
 use rustc_search_graph::*;
 use std::borrow::Borrow;
+use std::fmt::Write;
 use std::hash::Hasher;
 use std::iter;
 use std::{cell::RefCell, hash::DefaultHasher};
@@ -14,7 +14,7 @@ struct Ctxt<'a> {
 }
 impl<'a> Cx for Ctxt<'a> {
     type ProofTree = ();
-    type Input = usize;
+    type Input = Index;
     type Result = u8;
     type DepNode = ();
     type Tracked<T: Clone> = T;
@@ -64,7 +64,7 @@ impl<'a> Delegate<CtxtDelegate> for Ctxt<'a> {
     fn opt_initial_provisional_result(
         self,
         usage_kind: UsageKind,
-        input: Self::Input,
+        _: Self::Input,
     ) -> Option<Self::Result> {
         match usage_kind {
             UsageKind::Coinductive => Some(0),
@@ -84,26 +84,34 @@ impl<'a> Delegate<CtxtDelegate> for Ctxt<'a> {
             || self.is_initial_provisional_result(usage_kind, result)
     }
 
-    fn on_stack_overflow(
-        self,
-        inspect: &mut Self::ProofTreeBuilder,
-        input: Self::Input,
-    ) -> Self::Result {
+    fn on_stack_overflow(self, _: &mut Self::ProofTreeBuilder, _: Self::Input) -> Self::Result {
         11
     }
 
-    fn on_fixpoint_overflow(self, input: Self::Input) -> Self::Result {
+    fn on_fixpoint_overflow(self, _: Self::Input) -> Self::Result {
         12
     }
 
     fn step_is_coinductive(self, input: Self::Input) -> bool {
-        self.graph.borrow().nodes[input].is_coinductive
+        self.graph.borrow().nodes[input.0].is_coinductive
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Index(usize);
+impl std::fmt::Debug for Index {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0 < 26 {
+            f.write_char(('A' as u8 + self.0 as u8) as char)
+        } else {
+            write!(f, "{}", self.0)
+        }
     }
 }
 
 #[derive(Debug, Copy, Clone)]
 struct Child {
-    index: usize,
+    index: Index,
     cutoff: i8,
 }
 
@@ -124,12 +132,12 @@ impl Graph {
         let mut nodes = Vec::new();
         let mut rng = SmallRng::seed_from_u64(seed);
         for _ in 0..num_nodes {
-            let num_children = rng.gen_range(0..num_nodes + 2);
+            let num_children = rng.gen_range(0..num_nodes);
             nodes.push(Node {
                 is_coinductive: false,
                 initial: rng.gen(),
                 children: iter::repeat_with(|| Child {
-                    index: rng.gen_range(0..num_nodes),
+                    index: Index(rng.gen_range(0..num_nodes)),
                     cutoff: rng.gen(),
                 })
                 .take(num_children)
@@ -140,15 +148,16 @@ impl Graph {
     }
 }
 
+#[tracing::instrument(level = "debug", skip(cx, search_graph), ret)]
 fn evaluate_canonical_goal<'a>(
     cx: Ctxt<'a>,
     search_graph: &mut SearchGraph<Ctxt<'a>, CtxtDelegate>,
-    node: usize,
+    node: Index,
 ) -> u8 {
     search_graph.with_new_goal(cx, node, &mut (), |search_graph, _| {
         let mut hasher = DefaultHasher::new();
-        hasher.write_u64(cx.graph.nodes[node].initial);
-        for &Child { index, cutoff } in cx.graph.nodes[node].children.iter() {
+        hasher.write_u64(cx.graph.nodes[node.0].initial);
+        for &Child { index, cutoff } in cx.graph.nodes[node.0].children.iter() {
             let current = hasher.finish() as u8;
             let should_call = if cutoff.is_positive() {
                 current >= cutoff as u8
@@ -166,10 +175,24 @@ fn evaluate_canonical_goal<'a>(
     })
 }
 
+/// Run an action with a tracing log subscriber. The logging level is loaded
+/// from `RUST_LOG`. The `formality_macro::test` expansion uses this to enable logs.
+pub fn with_tracing_logs<T>(action: impl FnOnce() -> T) -> T {
+    use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
+    use tracing_tree::HierarchicalLayer;
+    let filter = EnvFilter::from_env("RUST_LOG");
+    let subscriber = Registry::default()
+        .with(filter)
+        .with(HierarchicalLayer::new(2).with_writer(std::io::stdout));
+    tracing::subscriber::with_default(subscriber, action)
+}
+
+#[allow(unused)]
 fn loopy_loop() {
     let mut rng = thread_rng();
     loop {
         let seed = rng.gen();
+        // 5: 12257704393984654560
         let graph = &Graph::from_seed(4, seed);
         let cx = Ctxt {
             graph,
@@ -178,23 +201,23 @@ fn loopy_loop() {
         let mut search_graph = SearchGraph::new(SolverMode::Normal);
 
         println!("{seed}");
-        evaluate_canonical_goal(cx, &mut search_graph, 0);
+        evaluate_canonical_goal(cx, &mut search_graph, Index(0));
         assert!(search_graph.is_empty());
     }
 }
 
 fn main() {
-    let mut rng = thread_rng();
-    // 7150588276811202185
-    let graph = &Graph::from_seed(4, 3483092833210014794);
-    let cx = Ctxt {
-        graph,
-        cache: &Default::default(),
-    };
-    let mut search_graph = SearchGraph::new(SolverMode::Normal);
+    //loopy_loop();
+    with_tracing_logs(|| {
+        let graph = &Graph::from_seed(4, 11585899145385698581);
+        let cx = Ctxt {
+            graph,
+            cache: &Default::default(),
+        };
+        let mut search_graph = SearchGraph::new(SolverMode::Normal);
 
-    println!("13806361276763622790 {graph:?}");
-    let graph = cx.graph.borrow();
-    evaluate_canonical_goal(cx, &mut search_graph, 0);
-    assert!(search_graph.is_empty());
+        println!("{graph:?}");
+        evaluate_canonical_goal(cx, &mut search_graph, Index(0));
+        assert!(search_graph.is_empty());
+    })
 }
