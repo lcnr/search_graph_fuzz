@@ -3,6 +3,7 @@ use rand::rngs::SmallRng;
 use rand::{thread_rng, Rng, SeedableRng};
 use rustc_search_graph::*;
 use std::borrow::Borrow;
+use std::fmt::Debug;
 use std::fmt::Write;
 use std::hash::Hasher;
 use std::iter::{self};
@@ -11,20 +12,20 @@ use std::{cell::RefCell, hash::DefaultHasher};
 
 #[derive(Clone, Copy)]
 struct Ctxt<'a> {
+    recursion_limit: usize,
     graph: &'a Graph,
     cache: &'a RefCell<GlobalCache<Ctxt<'a>>>,
 }
 impl<'a> Cx for Ctxt<'a> {
-    const VERIFY_CACHE: bool = true;
-    type ProofTree = ();
+    const VERIFY_CACHE: bool = false;
     type Input = Index;
     type Result = Res;
     type DepNode = ();
-    type Tracked<T: Clone> = T;
-    fn mk_tracked<T: Clone>(self, value: T, _: ()) -> T {
+    type Tracked<T: Debug + Clone> = T;
+    fn mk_tracked<T: Debug + Clone>(self, value: T, _: ()) -> T {
         value
     }
-    fn get_tracked<T: Clone>(self, value: &T) -> T {
+    fn get_tracked<T: Debug + Clone>(self, value: &T) -> T {
         value.clone()
     }
     fn with_anon_task<R>(self, f: impl FnOnce() -> R) -> (R, ()) {
@@ -36,7 +37,7 @@ impl<'a> Cx for Ctxt<'a> {
 }
 
 impl<'a> ProofTreeBuilder<Ctxt<'a>> for () {
-    fn try_apply_proof_tree(&mut self, _: ()) -> bool {
+    fn is_noop(&self) -> bool {
         true
     }
 
@@ -51,18 +52,27 @@ impl<'a> Delegate<CtxtDelegate> for Ctxt<'a> {
     type ProofTreeBuilder = ();
 
     fn recursion_limit(self) -> usize {
-        8
+        self.recursion_limit
     }
 
-    fn initial_provisional_result(self, cycle_kind: CycleKind, _: Self::Input) -> Self::Result {
+    fn initial_provisional_result(self, cycle_kind: PathKind, _: Self::Input) -> Self::Result {
         match cycle_kind {
-            CycleKind::Coinductive => Res(0),
-            CycleKind::Inductive => Res(10),
+            PathKind::Coinductive => Res(0),
+            PathKind::Inductive => Res(10),
+        }
+    }
+
+    fn is_initial_provisional_result(self, _: Self::Input, result: Self::Result) -> Option<PathKind> {
+        match result {
+            Res(0) => Some(PathKind::Coinductive),
+            Res(10) => Some(PathKind::Inductive),
+            _ => None,
         }
     }
 
     fn reached_fixpoint(
         self,
+        input: Self::Input,
         usage_kind: UsageKind,
         provisional_result: Option<Self::Result>,
         result: Self::Result,
@@ -70,9 +80,9 @@ impl<'a> Delegate<CtxtDelegate> for Ctxt<'a> {
         (Res(10)..Res(13)).contains(&result)
             || provisional_result.is_some_and(|r| r == result)
             || match usage_kind {
-                UsageKind::Single(CycleKind::Coinductive) => result == Res(0),
-                UsageKind::Single(CycleKind::Inductive) => result == Res(10),
-                UsageKind::Multiple => false,
+                UsageKind::Single(PathKind::Coinductive) => result == Res(0),
+                UsageKind::Single(PathKind::Inductive) => result == Res(10),
+                UsageKind::Mixed => false,
             }
     }
 
@@ -84,8 +94,12 @@ impl<'a> Delegate<CtxtDelegate> for Ctxt<'a> {
         Res(12)
     }
 
-    fn step_is_coinductive(self, input: Self::Input) -> bool {
-        self.graph.borrow().nodes[input.0].is_coinductive
+    fn step_kind(self, input: Self::Input) -> PathKind {
+        if self.graph.borrow().nodes[input.0].is_coinductive {
+            PathKind::Coinductive
+        } else {
+            PathKind::Inductive
+        }
     }
 }
 
@@ -321,12 +335,13 @@ pub fn with_tracing_logs<T>(action: impl FnOnce() -> T) -> T {
     tracing::subscriber::with_default(subscriber, action)
 }
 
-fn do_stuff(num_nodes: usize, max_children: usize, seed: u64) {
+fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed: u64) {
     if seed == 0 {
         let mut rng = thread_rng();
         for i in 0.. {
             let seed = rng.gen();
             let cx = Ctxt {
+                recursion_limit,
                 graph: &Graph::from_seed(num_nodes, max_children, seed),
                 cache: &Default::default(),
             };
@@ -338,10 +353,12 @@ fn do_stuff(num_nodes: usize, max_children: usize, seed: u64) {
     } else {
         with_tracing_logs(|| {
             let cx = Ctxt {
+                recursion_limit,
                 graph: &Graph::from_seed(num_nodes, max_children, seed),
                 cache: &Default::default(),
             };
             let mut search_graph = SearchGraph::new(SolverMode::Normal);
+            tracing::debug!(?cx.graph);
             evaluate_canonical_goal(cx, &mut search_graph, Index(0));
             assert!(search_graph.is_empty());
         })
@@ -349,5 +366,5 @@ fn do_stuff(num_nodes: usize, max_children: usize, seed: u64) {
 }
 
 fn main() {
-    do_stuff(9, 2, 12196716229312655479);
+    do_stuff(9, 6, 8, 0);
 }
