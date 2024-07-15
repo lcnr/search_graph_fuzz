@@ -1,7 +1,10 @@
+use rustc_type_ir::search_graph::*;
+use rustc_type_ir::solve::SolverMode;
+
 use rand::distributions::{Distribution, Standard};
 use rand::rngs::SmallRng;
 use rand::{thread_rng, Rng, SeedableRng};
-use rustc_search_graph::*;
+
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::fmt::Write;
@@ -17,10 +20,10 @@ struct Ctxt<'a> {
     cache: &'a RefCell<GlobalCache<Ctxt<'a>>>,
 }
 impl<'a> Cx for Ctxt<'a> {
-    const VERIFY_CACHE: bool = false;
     type Input = Index;
     type Result = Res;
-    type DepNode = ();
+    type ProofTree = ();
+    type DepNodeIndex = ();
     type Tracked<T: Debug + Clone> = T;
     fn mk_tracked<T: Debug + Clone>(self, value: T, _: ()) -> T {
         value
@@ -28,8 +31,8 @@ impl<'a> Cx for Ctxt<'a> {
     fn get_tracked<T: Debug + Clone>(self, value: &T) -> T {
         value.clone()
     }
-    fn with_anon_task<R>(self, f: impl FnOnce() -> R) -> (R, ()) {
-        (f(), ())
+    fn with_cached_task<T>(self, task: impl FnOnce() -> T) -> (T, Self::DepNodeIndex) {
+        (task(), ())
     }
     fn with_global_cache<R>(self, _: SolverMode, f: impl FnOnce(&mut GlobalCache<Self>) -> R) -> R {
         f(&mut *self.cache.borrow_mut())
@@ -37,69 +40,65 @@ impl<'a> Cx for Ctxt<'a> {
 }
 
 impl<'a> ProofTreeBuilder<Ctxt<'a>> for () {
-    fn is_noop(&self) -> bool {
-        true
-    }
-
+    fn try_apply_proof_tree(&mut self, _proof_tree: ()) -> bool { true }
+    fn on_provisional_cache_hit(&mut self) {}
     fn on_cycle_in_stack(&mut self) {}
-
     fn finalize_canonical_goal_evaluation(&mut self, _: Ctxt<'a>) {}
 }
 
-struct CtxtDelegate;
-impl<'a> Delegate<CtxtDelegate> for Ctxt<'a> {
+struct CtxtDelegate<'a>(&'a ());
+impl<'a> Delegate for CtxtDelegate<'a> {
+    type Cx = Ctxt<'a>;
     const FIXPOINT_STEP_LIMIT: usize = 4;
+
     type ProofTreeBuilder = ();
 
-    fn recursion_limit(self) -> usize {
-        self.recursion_limit
+    fn recursion_limit(cx: Ctxt<'a>) -> usize {
+        cx.recursion_limit
     }
 
-    fn initial_provisional_result(self, cycle_kind: PathKind, _: Self::Input) -> Self::Result {
-        match cycle_kind {
-            PathKind::Coinductive => Res(0),
-            PathKind::Inductive => Res(10),
-        }
-    }
-
-    fn is_initial_provisional_result(self, _: Self::Input, result: Self::Result) -> Option<PathKind> {
-        match result {
-            Res(0) => Some(PathKind::Coinductive),
-            Res(10) => Some(PathKind::Inductive),
-            _ => None,
+    fn initial_provisional_result(
+        cx: Ctxt<'a>,
+        kind: CycleKind,
+        _input: Index,
+    ) -> Res {
+        match kind {
+            CycleKind::Coinductive => Res(0),
+            CycleKind::Inductive => Res(10),
         }
     }
 
     fn reached_fixpoint(
-        self,
-        input: Self::Input,
-        usage_kind: UsageKind,
-        provisional_result: Option<Self::Result>,
-        result: Self::Result,
+        cx: Ctxt<'a>,
+        kind: UsageKind,
+        input: Index,
+        provisional_result: Option<Res>,
+        result: Res,
     ) -> bool {
-        (Res(10)..Res(13)).contains(&result)
-            || provisional_result.is_some_and(|r| r == result)
-            || match usage_kind {
-                UsageKind::Single(PathKind::Coinductive) => result == Res(0),
-                UsageKind::Single(PathKind::Inductive) => result == Res(10),
+        if let Some(r) = provisional_result {
+            r == result
+        } else {
+            match kind {
+                UsageKind::Single(kind) => Self::initial_provisional_result(cx, kind, input) == result,
                 UsageKind::Mixed => false,
             }
+        }
     }
 
-    fn on_stack_overflow(self, _: &mut Self::ProofTreeBuilder, _: Self::Input) -> Self::Result {
-        Res(11)
-    }
-
-    fn on_fixpoint_overflow(self, _: Self::Input) -> Self::Result {
+    fn on_stack_overflow(
+        cx: Ctxt<'a>,
+        inspect: &mut (),
+        input: Index,
+    ) -> Res {
         Res(12)
     }
 
-    fn step_kind(self, input: Self::Input) -> PathKind {
-        if self.graph.borrow().nodes[input.0].is_coinductive {
-            PathKind::Coinductive
-        } else {
-            PathKind::Inductive
-        }
+    fn on_fixpoint_overflow(_cx: Ctxt<'a>, _input: Index) -> Res {
+        Res(13)
+    }
+
+    fn step_is_coinductive(cx: Ctxt<'a>, input: Index) -> bool {
+        cx.graph.borrow().nodes[input.0].is_coinductive
     }
 }
 
@@ -274,7 +273,7 @@ impl Graph {
 #[tracing::instrument(level = "debug", skip(cx, search_graph), ret)]
 fn evaluate_canonical_goal<'a>(
     cx: Ctxt<'a>,
-    search_graph: &mut SearchGraph<Ctxt<'a>, CtxtDelegate>,
+    search_graph: &mut SearchGraph<CtxtDelegate<'a>>,
     node: Index,
 ) -> Res {
     search_graph.with_new_goal(cx, node, &mut (), |search_graph, _| {
@@ -366,5 +365,5 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
 }
 
 fn main() {
-    do_stuff(9, 6, 8, 0);
+    do_stuff(4, 2, 3, 0);
 }

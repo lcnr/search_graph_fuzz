@@ -7,12 +7,9 @@ edition = "2021"
 debug-assertions = true
 
 [dependencies]
-rustc_search_graph = { path = "../rust1/compiler/rustc_search_graph" }
+rustc_type_ir = { path = "../rust1/compiler/rustc_type_ir" }
 rand = { version = "0.8", features = ["small_rng"] }
 
 tracing = "0.1"
 tracing-subscriber = {version = "0.3", default-features = false, features = ["env-filter", "fmt"]}
 tracing-tree = { version = "0.2" }
-
-[features]
-parallel_compiler = []
