@@ -1,17 +1,18 @@
-use core::num;
 use rand::distributions::{Distribution, Standard};
 use rand::rngs::SmallRng;
 use rand::{thread_rng, Rng, SeedableRng};
 use rustc_type_ir::search_graph::*;
 use rustc_type_ir::solve::SolverMode;
 use std::borrow::Borrow;
+use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::fmt::Write;
+use std::hash::DefaultHasher;
 use std::hash::Hasher;
 use std::iter::{self};
 use std::marker::PhantomData;
 use std::mem;
-use std::{cell::RefCell, hash::DefaultHasher};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 struct DisableCache {
     rng: SmallRng,
@@ -20,6 +21,7 @@ struct DisableCache {
 
 #[derive(Clone, Copy)]
 struct Ctxt<'a> {
+    num_steps: &'a Cell<usize>,
     disable_cache: &'a RefCell<DisableCache>,
     recursion_limit: usize,
     graph: &'a Graph,
@@ -65,7 +67,6 @@ impl<'a> Delegate for CtxtDelegate<'a> {
         cx: Self::Cx,
         input: <Self::Cx as Cx>::Input,
     ) -> Option<ValidationScope<'a>> {
-        return None;
         let mut disable_cache = cx.disable_cache.borrow_mut();
         if disable_cache.stack.contains(&input) || disable_cache.rng.gen() {
             disable_cache.stack.push(input);
@@ -297,6 +298,7 @@ fn evaluate_canonical_goal<'a>(
     search_graph: &mut SearchGraph<CtxtDelegate<'a>>,
     node: Index,
 ) -> Res {
+    cx.num_steps.set(cx.num_steps.get() + 1);
     search_graph.with_new_goal(cx, node, &mut (), |search_graph, _| {
         let mut hasher = DefaultHasher::new();
         hasher.write_u64(cx.graph.nodes[node.0].initial);
@@ -355,12 +357,19 @@ pub fn with_tracing_logs<T>(action: impl FnOnce() -> T) -> T {
     tracing::subscriber::with_default(subscriber, action)
 }
 
-fn test_from_seed(num_nodes: usize, max_children: usize, recursion_limit: usize, seed: u64) {
+fn test_from_seed(
+    num_steps: &Cell<usize>,
+    num_nodes: usize,
+    max_children: usize,
+    recursion_limit: usize,
+    seed: u64,
+) {
     let disable_cache = DisableCache {
         rng: SmallRng::seed_from_u64(seed),
         stack: Vec::new(),
     };
     let cx = Ctxt {
+        num_steps,
         disable_cache: &RefCell::new(disable_cache),
         recursion_limit,
         graph: &Graph::from_seed(num_nodes, max_children, seed),
@@ -389,17 +398,42 @@ fn test_from_seed(num_nodes: usize, max_children: usize, recursion_limit: usize,
 fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed: u64) {
     if seed == 0 {
         let mut rng = thread_rng();
-        for i in 0.. {
-            let seed = rng.gen();
-            print!("\r{i:15}: {seed:20} ");
-            test_from_seed(num_nodes, max_children, recursion_limit, seed);
+        let mut min_num_steps = usize::MAX;
+
+        std::panic::set_hook(Box::new(|_| ()));
+        loop {
+            let mut num_steps = Cell::new(0);
+
+            for i in 0.. {
+                let seed = rng.gen();
+                let res = catch_unwind(AssertUnwindSafe(|| {
+                    print!("\r{i:15}: {seed:20} ");
+                    num_steps = Cell::new(0);
+                    test_from_seed(&num_steps, num_nodes, max_children, recursion_limit, seed);
+                    print!("num_steps: {:5}", num_steps.get());
+                }));
+
+                if res.is_err() && num_steps.get() < min_num_steps {
+                    println!("\r{i:15}: {seed:20} num_steps: {:5} (new best)", num_steps.get());
+                    min_num_steps = num_steps.get();
+                    break;
+                }
+            }
         }
     } else {
-        with_tracing_logs(|| test_from_seed(num_nodes, max_children, recursion_limit, seed))
+        with_tracing_logs(|| {
+            test_from_seed(
+                &Cell::new(0),
+                num_nodes,
+                max_children,
+                recursion_limit,
+                seed,
+            )
+        })
     }
 }
 
 fn main() {
-    // 4 2 10965864802906061086
-    do_stuff(4, 2, 2, 0);
+    // 3 1 7837967547938528536
+    do_stuff(8, 4, 2, 12000782482717963591);
 }
