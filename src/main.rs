@@ -1,20 +1,26 @@
-use rustc_type_ir::search_graph::*;
-use rustc_type_ir::solve::SolverMode;
-
+use core::num;
 use rand::distributions::{Distribution, Standard};
 use rand::rngs::SmallRng;
 use rand::{thread_rng, Rng, SeedableRng};
-
+use rustc_type_ir::search_graph::*;
+use rustc_type_ir::solve::SolverMode;
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::fmt::Write;
 use std::hash::Hasher;
 use std::iter::{self};
+use std::marker::PhantomData;
 use std::mem;
 use std::{cell::RefCell, hash::DefaultHasher};
 
+struct DisableCache {
+    rng: SmallRng,
+    stack: Vec<Index>,
+}
+
 #[derive(Clone, Copy)]
 struct Ctxt<'a> {
+    disable_cache: &'a RefCell<DisableCache>,
     recursion_limit: usize,
     graph: &'a Graph,
     cache: &'a RefCell<GlobalCache<Ctxt<'a>>>,
@@ -22,7 +28,6 @@ struct Ctxt<'a> {
 impl<'a> Cx for Ctxt<'a> {
     type Input = Index;
     type Result = Res;
-    type ProofTree = ();
     type DepNodeIndex = ();
     type Tracked<T: Debug + Clone> = T;
     fn mk_tracked<T: Debug + Clone>(self, value: T, _: ()) -> T {
@@ -39,29 +44,47 @@ impl<'a> Cx for Ctxt<'a> {
     }
 }
 
-impl<'a> ProofTreeBuilder<Ctxt<'a>> for () {
-    fn try_apply_proof_tree(&mut self, _proof_tree: ()) -> bool { true }
-    fn on_provisional_cache_hit(&mut self) {}
-    fn on_cycle_in_stack(&mut self) {}
-    fn finalize_canonical_goal_evaluation(&mut self, _: Ctxt<'a>) {}
+struct ValidationScope<'a> {
+    cx: Ctxt<'a>,
+    input: Index,
+}
+impl<'a> Drop for ValidationScope<'a> {
+    fn drop(&mut self) {
+        let entry = self.cx.disable_cache.borrow_mut().stack.pop();
+        assert_eq!(entry, Some(self.input));
+    }
 }
 
-struct CtxtDelegate<'a>(&'a ());
+struct CtxtDelegate<'a>(PhantomData<&'a ()>);
 impl<'a> Delegate for CtxtDelegate<'a> {
     type Cx = Ctxt<'a>;
-    const FIXPOINT_STEP_LIMIT: usize = 4;
+    const FIXPOINT_STEP_LIMIT: usize = 2;
+
+    type ValidationScope = ValidationScope<'a>;
+    fn enter_validation_scope(
+        cx: Self::Cx,
+        input: <Self::Cx as Cx>::Input,
+    ) -> Option<ValidationScope<'a>> {
+        return None;
+        let mut disable_cache = cx.disable_cache.borrow_mut();
+        if disable_cache.stack.contains(&input) || disable_cache.rng.gen() {
+            disable_cache.stack.push(input);
+            Some(ValidationScope { cx, input })
+        } else {
+            None
+        }
+    }
 
     type ProofTreeBuilder = ();
+    fn inspect_is_noop(_: &mut Self::ProofTreeBuilder) -> bool {
+        true
+    }
 
     fn recursion_limit(cx: Ctxt<'a>) -> usize {
         cx.recursion_limit
     }
 
-    fn initial_provisional_result(
-        cx: Ctxt<'a>,
-        kind: CycleKind,
-        _input: Index,
-    ) -> Res {
+    fn initial_provisional_result(_cx: Ctxt<'a>, kind: CycleKind, _input: Index) -> Res {
         match kind {
             CycleKind::Coinductive => Res(0),
             CycleKind::Inductive => Res(10),
@@ -79,22 +102,20 @@ impl<'a> Delegate for CtxtDelegate<'a> {
             r == result
         } else {
             match kind {
-                UsageKind::Single(kind) => Self::initial_provisional_result(cx, kind, input) == result,
+                UsageKind::Single(kind) => {
+                    Self::initial_provisional_result(cx, kind, input) == result
+                }
                 UsageKind::Mixed => false,
             }
         }
     }
 
-    fn on_stack_overflow(
-        cx: Ctxt<'a>,
-        inspect: &mut (),
-        input: Index,
-    ) -> Res {
-        Res(12)
+    fn on_stack_overflow(_cx: Ctxt<'a>, _inspect: &mut (), _input: Index) -> Res {
+        Res(11)
     }
 
     fn on_fixpoint_overflow(_cx: Ctxt<'a>, _input: Index) -> Res {
-        Res(13)
+        Res(12)
     }
 
     fn step_is_coinductive(cx: Ctxt<'a>, input: Index) -> bool {
@@ -334,36 +355,51 @@ pub fn with_tracing_logs<T>(action: impl FnOnce() -> T) -> T {
     tracing::subscriber::with_default(subscriber, action)
 }
 
+fn test_from_seed(num_nodes: usize, max_children: usize, recursion_limit: usize, seed: u64) {
+    let disable_cache = DisableCache {
+        rng: SmallRng::seed_from_u64(seed),
+        stack: Vec::new(),
+    };
+    let cx = Ctxt {
+        disable_cache: &RefCell::new(disable_cache),
+        recursion_limit,
+        graph: &Graph::from_seed(num_nodes, max_children, seed),
+        cache: &Default::default(),
+    };
+    let mut search_graph = SearchGraph::new(SolverMode::Normal);
+
+    let mut rng = SmallRng::seed_from_u64(seed);
+
+    evaluate_canonical_goal(cx, &mut search_graph, Index(0));
+    let num_root_goals = rng.gen_range(1..num_nodes);
+    for i in 0..num_root_goals {
+        let index = if i == 0 {
+            0
+        } else {
+            rng.gen_range(0..num_nodes)
+        };
+        evaluate_canonical_goal(cx, &mut search_graph, Index(index));
+        assert!(search_graph.is_empty());
+        assert!(cx.disable_cache.borrow().stack.is_empty());
+    }
+    assert!(search_graph.is_empty());
+    assert!(cx.disable_cache.borrow().stack.is_empty());
+}
+
 fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed: u64) {
     if seed == 0 {
         let mut rng = thread_rng();
         for i in 0.. {
             let seed = rng.gen();
-            let cx = Ctxt {
-                recursion_limit,
-                graph: &Graph::from_seed(num_nodes, max_children, seed),
-                cache: &Default::default(),
-            };
-            let mut search_graph = SearchGraph::new(SolverMode::Normal);
             print!("\r{i:15}: {seed:20} ");
-            evaluate_canonical_goal(cx, &mut search_graph, Index(0));
-            assert!(search_graph.is_empty());
+            test_from_seed(num_nodes, max_children, recursion_limit, seed);
         }
     } else {
-        with_tracing_logs(|| {
-            let cx = Ctxt {
-                recursion_limit,
-                graph: &Graph::from_seed(num_nodes, max_children, seed),
-                cache: &Default::default(),
-            };
-            let mut search_graph = SearchGraph::new(SolverMode::Normal);
-            tracing::debug!(?cx.graph);
-            evaluate_canonical_goal(cx, &mut search_graph, Index(0));
-            assert!(search_graph.is_empty());
-        })
+        with_tracing_logs(|| test_from_seed(num_nodes, max_children, recursion_limit, seed))
     }
 }
 
 fn main() {
-    do_stuff(4, 2, 3, 0);
+    // 4 2 10965864802906061086
+    do_stuff(4, 2, 2, 0);
 }
