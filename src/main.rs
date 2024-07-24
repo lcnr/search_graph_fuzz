@@ -21,7 +21,7 @@ struct DisableCache {
 
 #[derive(Clone, Copy)]
 struct Ctxt<'a> {
-    num_steps: &'a Cell<usize>,
+    cost: &'a Cell<usize>,
     disable_cache: &'a RefCell<DisableCache>,
     recursion_limit: usize,
     graph: &'a Graph,
@@ -298,7 +298,7 @@ fn evaluate_canonical_goal<'a>(
     search_graph: &mut SearchGraph<CtxtDelegate<'a>>,
     node: Index,
 ) -> Res {
-    cx.num_steps.set(cx.num_steps.get() + 1);
+    cx.cost.set(cx.cost.get() + 4);
     search_graph.with_new_goal(cx, node, &mut (), |search_graph, _| {
         let mut hasher = DefaultHasher::new();
         hasher.write_u64(cx.graph.nodes[node.0].initial);
@@ -307,6 +307,7 @@ fn evaluate_canonical_goal<'a>(
             let current = Res::from_u64(hasher.finish());
             if cutoff.applies(current) {
                 if !trivial_skip {
+                    cx.cost.set(cx.cost.get() + 1);
                     tracing::debug!(?index, "skip nested");
                 } else {
                     unreachable!()
@@ -358,7 +359,7 @@ pub fn with_tracing_logs<T>(action: impl FnOnce() -> T) -> T {
 }
 
 fn test_from_seed(
-    num_steps: &Cell<usize>,
+    cost: &Cell<usize>,
     num_nodes: usize,
     max_children: usize,
     recursion_limit: usize,
@@ -369,7 +370,7 @@ fn test_from_seed(
         stack: Vec::new(),
     };
     let cx = Ctxt {
-        num_steps,
+        cost,
         disable_cache: &RefCell::new(disable_cache),
         recursion_limit,
         graph: &Graph::from_seed(num_nodes, max_children, seed),
@@ -379,7 +380,6 @@ fn test_from_seed(
 
     let mut rng = SmallRng::seed_from_u64(seed);
 
-    evaluate_canonical_goal(cx, &mut search_graph, Index(0));
     let num_root_goals = rng.gen_range(1..num_nodes);
     for i in 0..num_root_goals {
         let index = if i == 0 {
@@ -398,24 +398,24 @@ fn test_from_seed(
 fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed: u64) {
     if seed == 0 {
         let mut rng = thread_rng();
-        let mut min_num_steps = usize::MAX;
+        let mut min_cost = usize::MAX;
 
         std::panic::set_hook(Box::new(|_| ()));
         loop {
-            let mut num_steps = Cell::new(0);
+            let mut cost = Cell::new(0);
 
             for i in 0.. {
                 let seed = rng.gen();
                 let res = catch_unwind(AssertUnwindSafe(|| {
                     print!("\r{i:15}: {seed:20} ");
-                    num_steps = Cell::new(0);
-                    test_from_seed(&num_steps, num_nodes, max_children, recursion_limit, seed);
-                    print!("num_steps: {:5}", num_steps.get());
+                    cost = Cell::new(0);
+                    test_from_seed(&cost, num_nodes, max_children, recursion_limit, seed);
+                    print!("cost: {:5}", cost.get());
                 }));
 
-                if res.is_err() && num_steps.get() < min_num_steps {
-                    println!("\r{i:15}: {seed:20} num_steps: {:5} (new best)", num_steps.get());
-                    min_num_steps = num_steps.get();
+                if res.is_err() && cost.get() < min_cost {
+                    println!("\r{i:15}: {seed:20} cost: {:5} (new best)", cost.get());
+                    min_cost = cost.get();
                     break;
                 }
             }
@@ -435,5 +435,5 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
 
 fn main() {
     // 3 1 7837967547938528536
-    do_stuff(8, 4, 2, 12000782482717963591);
+    do_stuff(4, 2, 2, 5802416440568674494);
 }
