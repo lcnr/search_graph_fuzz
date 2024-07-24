@@ -14,6 +14,7 @@ use std::iter::{self};
 use std::marker::PhantomData;
 use std::mem;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{self, AtomicUsize};
 
 struct DisableCache {
     rng: SmallRng,
@@ -299,7 +300,7 @@ fn evaluate_canonical_goal<'a>(
     search_graph: &mut SearchGraph<CtxtDelegate<'a>>,
     node: Index,
 ) -> Res {
-    cx.cost.set(cx.cost.get() + 10 + search_graph.debug_current_depth());
+    cx.cost.set(cx.cost.get() + 1 + search_graph.debug_current_depth());
     search_graph.with_new_goal(cx, node, &mut (), |search_graph, _| {
         cx.cost.set(cx.cost.get() + 5);
         let mut hasher = DefaultHasher::new();
@@ -399,28 +400,38 @@ fn test_from_seed(
 
 fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed: u64) {
     if seed == 0 {
-        let mut rng = thread_rng();
-        let mut min_cost = usize::MAX;
-
         std::panic::set_hook(Box::new(|_| ()));
-        loop {
-            for i in 0.. {
-                let cost = Cell::new(0);
-                let seed = rng.gen();
-                let res = catch_unwind(AssertUnwindSafe(|| {
-                    test_from_seed(&cost, num_nodes, max_children, recursion_limit, seed);
-                }));
+        let min_cost = AtomicUsize::new(usize::MAX);
+        let num_tries = AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for _ in 0..16 {
+                s.spawn(|| {
+                    let mut rng = thread_rng();
+                    loop {
+                        let cost = Cell::new(0);
+                        let seed = rng.gen();
+                        let res = catch_unwind(AssertUnwindSafe(|| {
+                            test_from_seed(&cost, num_nodes, max_children, recursion_limit, seed);
+                        }));
 
-                if res.is_err() && cost.get() < min_cost {
-                    println!("\r{i:15}: {seed:20} cost: {:5} (new best)", cost.get());
-                    min_cost = cost.get();
-                    break;
-                } else if i % 10000 == 0 {
-                    print!("\r{i:15}");
-                    let _ = std::io::stdout().flush();
-                }
+                        if res.is_err() {
+                            let prev = min_cost.fetch_min(cost.get(), atomic::Ordering::Relaxed);
+                            if prev > cost.get() {
+                                let i = num_tries.swap(0, atomic::Ordering::Relaxed);
+                                println!("\r{i:15}: {seed:20} cost: {:5} (new best)", cost.get());
+                                continue;
+                            }
+                        }
+
+                        let old = num_tries.fetch_add(1, atomic::Ordering::Relaxed);
+                        if old % 500000 == 0 {
+                            print!("\r{old:15}");
+                            let _ = std::io::stdout().flush();
+                        }
+                    }
+                });
             }
-        }
+        });
     } else {
         with_tracing_logs(|| {
             test_from_seed(
@@ -435,5 +446,7 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
 }
 
 fn main() {
-    do_stuff(8, 3, 20, 0);
+    // 8 3 20 4621883001622421945
+    // 5 3 20 8275383093699690175
+    do_stuff(5, 3, 20, 0);
 }
