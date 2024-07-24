@@ -298,7 +298,7 @@ fn evaluate_canonical_goal<'a>(
     search_graph: &mut SearchGraph<CtxtDelegate<'a>>,
     node: Index,
 ) -> Res {
-    cx.cost.set(cx.cost.get() + 4);
+    cx.cost.set(cx.cost.get() + 4 + search_graph.debug_current_depth());
     search_graph.with_new_goal(cx, node, &mut (), |search_graph, _| {
         let mut hasher = DefaultHasher::new();
         hasher.write_u64(cx.graph.nodes[node.0].initial);
@@ -402,13 +402,11 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
 
         std::panic::set_hook(Box::new(|_| ()));
         loop {
-            let mut cost = Cell::new(0);
-
             for i in 0.. {
+                let cost = Cell::new(0);
                 let seed = rng.gen();
                 let res = catch_unwind(AssertUnwindSafe(|| {
                     print!("\r{i:15}: {seed:20} ");
-                    cost = Cell::new(0);
                     test_from_seed(&cost, num_nodes, max_children, recursion_limit, seed);
                     print!("cost: {:5}", cost.get());
                 }));
@@ -435,5 +433,5 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
 
 fn main() {
     // 3 1 7837967547938528536
-    do_stuff(4, 2, 2, 5802416440568674494);
+    do_stuff(4, 3, 2, 10512000534108879046);
 }
