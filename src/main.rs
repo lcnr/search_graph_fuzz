@@ -9,6 +9,7 @@ use std::fmt::Debug;
 use std::fmt::Write;
 use std::hash::DefaultHasher;
 use std::hash::Hasher;
+use std::io::Write as _;
 use std::iter::{self};
 use std::marker::PhantomData;
 use std::mem;
@@ -292,14 +293,15 @@ impl Graph {
     }
 }
 
-#[tracing::instrument(level = "debug", skip(cx, search_graph), ret)]
+#[tracing::instrument(level = "debug", skip(cx, search_graph), fields(coinductive = ?cx.graph.nodes[node.0].is_coinductive), ret)]
 fn evaluate_canonical_goal<'a>(
     cx: Ctxt<'a>,
     search_graph: &mut SearchGraph<CtxtDelegate<'a>>,
     node: Index,
 ) -> Res {
-    cx.cost.set(cx.cost.get() + 4 + search_graph.debug_current_depth());
+    cx.cost.set(cx.cost.get() + 10 + search_graph.debug_current_depth());
     search_graph.with_new_goal(cx, node, &mut (), |search_graph, _| {
+        cx.cost.set(cx.cost.get() + 5);
         let mut hasher = DefaultHasher::new();
         hasher.write_u64(cx.graph.nodes[node.0].initial);
         let mut trivial_skip = true;
@@ -406,15 +408,16 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
                 let cost = Cell::new(0);
                 let seed = rng.gen();
                 let res = catch_unwind(AssertUnwindSafe(|| {
-                    print!("\r{i:15}: {seed:20} ");
                     test_from_seed(&cost, num_nodes, max_children, recursion_limit, seed);
-                    print!("cost: {:5}", cost.get());
                 }));
 
                 if res.is_err() && cost.get() < min_cost {
                     println!("\r{i:15}: {seed:20} cost: {:5} (new best)", cost.get());
                     min_cost = cost.get();
                     break;
+                } else if i % 10000 == 0 {
+                    print!("\r{i:15}");
+                    let _ = std::io::stdout().flush();
                 }
             }
         }
@@ -432,6 +435,5 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
 }
 
 fn main() {
-    // 3 1 7837967547938528536
-    do_stuff(4, 3, 2, 10512000534108879046);
+    do_stuff(8, 3, 20, 0);
 }
