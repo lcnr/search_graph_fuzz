@@ -1,21 +1,17 @@
 use rand::distributions::{Distribution, Standard};
 use rand::rngs::SmallRng;
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rustc_type_ir::search_graph::*;
 use rustc_type_ir::solve::SolverMode;
-use std::borrow::{Borrow, BorrowMut};
+use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::fmt::Write;
 use std::hash::DefaultHasher;
 use std::hash::Hasher;
-use std::io::Write as _;
 use std::iter::{self};
 use std::marker::PhantomData;
 use std::mem;
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{self, AtomicUsize};
-use std::sync::RwLock;
 
 struct DisableCache {
     rng: SmallRng,
