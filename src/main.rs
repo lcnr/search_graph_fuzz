@@ -3,7 +3,7 @@ use rand::rngs::SmallRng;
 use rand::{thread_rng, Rng, SeedableRng};
 use rustc_type_ir::search_graph::*;
 use rustc_type_ir::solve::SolverMode;
-use std::borrow::Borrow;
+use std::borrow::{Borrow, BorrowMut};
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::fmt::Write;
@@ -15,6 +15,7 @@ use std::marker::PhantomData;
 use std::mem;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{self, AtomicUsize};
+use std::sync::RwLock;
 
 struct DisableCache {
     rng: SmallRng,
@@ -94,23 +95,13 @@ impl<'a> Delegate for CtxtDelegate<'a> {
         }
     }
 
-    fn reached_fixpoint(
-        cx: Ctxt<'a>,
-        kind: UsageKind,
-        input: Index,
-        provisional_result: Option<Res>,
-        result: Res,
+    fn is_initial_provisional_result(
+        cx: Self::Cx,
+        kind: CycleKind,
+        input: <Self::Cx as Cx>::Input,
+        result: <Self::Cx as Cx>::Result,
     ) -> bool {
-        if let Some(r) = provisional_result {
-            r == result
-        } else {
-            match kind {
-                UsageKind::Single(kind) => {
-                    Self::initial_provisional_result(cx, kind, input) == result
-                }
-                UsageKind::Mixed => false,
-            }
-        }
+        Self::initial_provisional_result(cx, kind, input) == result
     }
 
     fn on_stack_overflow(_cx: Ctxt<'a>, _inspect: &mut (), _input: Index) -> Res {
@@ -119,6 +110,18 @@ impl<'a> Delegate for CtxtDelegate<'a> {
 
     fn on_fixpoint_overflow(_cx: Ctxt<'a>, _input: Index) -> Res {
         Res(12)
+    }
+
+    fn is_ambiguous_result(result: <Self::Cx as Cx>::Result) -> bool {
+        result.0 >= 10 && result.0 <= 12
+    }
+
+    fn propagate_ambiguity(
+        _: Self::Cx,
+        _: <Self::Cx as Cx>::Input,
+        from_result: <Self::Cx as Cx>::Result,
+    ) -> <Self::Cx as Cx>::Result {
+        from_result
     }
 
     fn step_is_coinductive(cx: Ctxt<'a>, input: Index) -> bool {
@@ -300,7 +303,8 @@ fn evaluate_canonical_goal<'a>(
     search_graph: &mut SearchGraph<CtxtDelegate<'a>>,
     node: Index,
 ) -> Res {
-    cx.cost.set(cx.cost.get() + 1 + search_graph.debug_current_depth());
+    cx.cost
+        .set(cx.cost.get() + 1 + search_graph.debug_current_depth());
     search_graph.with_new_goal(cx, node, &mut (), |search_graph, _| {
         cx.cost.set(cx.cost.get() + 5);
         let mut hasher = DefaultHasher::new();
@@ -394,8 +398,6 @@ fn test_from_seed(
         assert!(search_graph.is_empty());
         assert!(cx.disable_cache.borrow().stack.is_empty());
     }
-    assert!(search_graph.is_empty());
-    assert!(cx.disable_cache.borrow().stack.is_empty());
 }
 
 fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed: u64) {
@@ -447,6 +449,7 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
 
 fn main() {
     // 8 3 20 4621883001622421945
-    // 5 3 20 8275383093699690175
-    do_stuff(5, 3, 20, 0);
+    // 8 3 20 15886988225882956210
+    // 6 3 10 6474412646705121343
+    do_stuff(8, 3, 9, 0);
 }
