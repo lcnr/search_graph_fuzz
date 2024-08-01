@@ -18,6 +18,17 @@ struct DisableCache {
     stack: Vec<Index>,
 }
 
+struct ValidationScope<'a> {
+    cx: Ctxt<'a>,
+    input: Index,
+}
+impl<'a> Drop for ValidationScope<'a> {
+    fn drop(&mut self) {
+        let entry = self.cx.disable_cache.borrow_mut().stack.pop();
+        assert_eq!(entry, Some(self.input));
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Ctxt<'a> {
     cost: &'a Cell<usize>,
@@ -42,17 +53,6 @@ impl<'a> Cx for Ctxt<'a> {
     }
     fn with_global_cache<R>(self, _: SolverMode, f: impl FnOnce(&mut GlobalCache<Self>) -> R) -> R {
         f(&mut *self.cache.borrow_mut())
-    }
-}
-
-struct ValidationScope<'a> {
-    cx: Ctxt<'a>,
-    input: Index,
-}
-impl<'a> Drop for ValidationScope<'a> {
-    fn drop(&mut self) {
-        let entry = self.cx.disable_cache.borrow_mut().stack.pop();
-        assert_eq!(entry, Some(self.input));
     }
 }
 
