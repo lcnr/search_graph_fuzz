@@ -1,3 +1,4 @@
+use core::num;
 use rand::distributions::{Distribution, Standard};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -60,7 +61,7 @@ struct CtxtDelegate<'a>(PhantomData<&'a ()>);
 impl<'a> Delegate for CtxtDelegate<'a> {
     type Cx = Ctxt<'a>;
     const FIXPOINT_STEP_LIMIT: usize = 2;
-
+    const ENABLE_PROVISIONAL_CACHE: bool = true;
     type ValidationScope = ValidationScope<'a>;
     fn enter_validation_scope(
         cx: Self::Cx,
@@ -198,8 +199,12 @@ struct Graph {
 }
 
 impl Graph {
-    fn from_seed(num_nodes: usize, max_children: usize, seed: u64) -> Graph {
-        let mut rng = SmallRng::seed_from_u64(seed);
+    fn generate(
+        num_nodes: usize,
+        max_children: usize,
+        roots: &[Index],
+        rng: &mut impl Rng,
+    ) -> Graph {
         'outer: loop {
             let mut nodes = Vec::new();
             for _ in 0..num_nodes {
@@ -219,7 +224,9 @@ impl Graph {
             let mut graph = Graph { nodes };
             graph.prune_trivially_skipped_nodes();
             let mut reached = vec![false; num_nodes];
-            reached[0] = true;
+            for r in roots {
+                reached[r.0] = true;
+            }
             loop {
                 let mut has_changed = false;
                 for i in 0..num_nodes {
@@ -235,7 +242,7 @@ impl Graph {
 
                 if !has_changed {
                     if reached.iter().all(|e| *e) {
-                        return graph.normalize();
+                        return graph.normalize(roots);
                     } else {
                         continue 'outer;
                     }
@@ -259,16 +266,16 @@ impl Graph {
         }
     }
 
-    fn normalize(mut self) -> Graph {
+    fn normalize(mut self, roots: &[Index]) -> Graph {
         let mut by_occurance = vec![];
-        let mut queue = vec![0];
+        let mut queue = roots.to_vec();
         while let Some(value) = queue.pop() {
             if by_occurance.contains(&value) {
                 continue;
             }
             by_occurance.push(value);
-            for &child in self.nodes[value].children.iter().rev() {
-                queue.push(child.index.0);
+            for &child in self.nodes[value.0].children.iter().rev() {
+                queue.push(child.index);
             }
         }
 
@@ -278,9 +285,9 @@ impl Graph {
                 is_coinductive,
                 initial,
                 mut children,
-            } = mem::take(&mut self.nodes[i]);
+            } = mem::take(&mut self.nodes[i.0]);
             for Child { index, cutoff: _ } in children.iter_mut() {
-                *index = Index(by_occurance.iter().position(|&i| i == index.0).unwrap());
+                *index = Index(by_occurance.iter().position(|&i| i == *index).unwrap());
             }
             nodes.push(Node {
                 initial,
@@ -334,29 +341,29 @@ pub(super) fn test_from_seed(
     recursion_limit: usize,
     seed: u64,
 ) {
+    let mut rng = SmallRng::seed_from_u64(seed);
+
     let disable_cache = DisableCache {
         rng: SmallRng::seed_from_u64(seed),
         stack: Vec::new(),
     };
+
+    let num_root_goals = rng.gen_range(0..num_nodes);
+    let roots = iter::once(Index(0))
+        .chain(iter::repeat_with(|| Index(rng.gen_range(0..num_nodes))).take(num_root_goals))
+        .collect::<Vec<_>>();
+
     let cx = Ctxt {
         cost,
         disable_cache: &RefCell::new(disable_cache),
         recursion_limit,
-        graph: &Graph::from_seed(num_nodes, max_children, seed),
+        graph: &Graph::generate(num_nodes, max_children, &roots, &mut rng),
         cache: &Default::default(),
     };
     let mut search_graph = SearchGraph::new(SolverMode::Normal);
 
-    let mut rng = SmallRng::seed_from_u64(seed);
-
-    let num_root_goals = rng.gen_range(1..num_nodes);
-    for i in 0..num_root_goals {
-        let index = if i == 0 {
-            0
-        } else {
-            rng.gen_range(0..num_nodes)
-        };
-        evaluate_canonical_goal(cx, &mut search_graph, Index(index));
+    for node in roots {
+        evaluate_canonical_goal(cx, &mut search_graph, node);
         assert!(search_graph.is_empty());
         assert!(cx.disable_cache.borrow().stack.is_empty());
     }
