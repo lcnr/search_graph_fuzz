@@ -1,7 +1,7 @@
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rustc_type_ir::search_graph::*;
-use rustc_type_ir::solve::SolverMode;
+use rustc_type_ir::solve::GoalSource;
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
@@ -15,13 +15,19 @@ use crate::Index;
 #[derive(Clone, Copy)]
 struct Ctxt<'a> {
     cost: &'a Cell<usize>,
-    recursion_limit: usize,
     graph: &'a Graph,
     cache: &'a RefCell<GlobalCache<Ctxt<'a>>>,
 }
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+enum Res {
+    Error,
+    Ambig,
+    Yes,
+}
 impl<'a> Cx for Ctxt<'a> {
     type Input = Index;
-    type Result = bool;
+    type Result = Res;
     type DepNodeIndex = ();
     type Tracked<T: Debug + Clone> = T;
     fn mk_tracked<T: Debug + Clone>(self, value: T, _: ()) -> T {
@@ -33,8 +39,11 @@ impl<'a> Cx for Ctxt<'a> {
     fn with_cached_task<T>(self, task: impl FnOnce() -> T) -> (T, Self::DepNodeIndex) {
         (task(), ())
     }
-    fn with_global_cache<R>(self, _: SolverMode, f: impl FnOnce(&mut GlobalCache<Self>) -> R) -> R {
+    fn with_global_cache<R>(self, f: impl FnOnce(&mut GlobalCache<Self>) -> R) -> R {
         f(&mut *self.cache.borrow_mut())
+    }
+    fn evaluation_is_concurrent(&self) -> bool {
+        false
     }
 }
 
@@ -54,36 +63,34 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
         true
     }
 
-    fn recursion_limit(cx: Ctxt<'a>) -> usize {
-        cx.recursion_limit
-    }
+    const DIVIDE_AVAILABLE_DEPTH_ON_OVERFLOW: usize = 2;
 
-    fn initial_provisional_result(_cx: Ctxt<'a>, kind: CycleKind, _input: Index) -> bool {
+    fn initial_provisional_result(_cx: Ctxt<'a>, kind: PathKind, _input: Index) -> Res {
         match kind {
-            CycleKind::Coinductive => true,
-            CycleKind::Inductive => false,
+            PathKind::Coinductive => Res::Yes,
+            PathKind::Inductive => Res::Error,
         }
     }
 
     fn is_initial_provisional_result(
         cx: Self::Cx,
-        kind: CycleKind,
+        kind: PathKind,
         input: <Self::Cx as Cx>::Input,
         result: <Self::Cx as Cx>::Result,
     ) -> bool {
         Self::initial_provisional_result(cx, kind, input) == result
     }
 
-    fn on_stack_overflow(_cx: Ctxt<'a>, _inspect: &mut (), _input: Index) -> bool {
-        false
+    fn on_stack_overflow(_cx: Ctxt<'a>, _inspect: &mut (), _input: Index) -> Res {
+        Res::Ambig
     }
 
-    fn on_fixpoint_overflow(_cx: Ctxt<'a>, _input: Index) -> bool {
-        false
+    fn on_fixpoint_overflow(cx: Ctxt<'a>, _input: Index) -> Res {
+        Res::Ambig
     }
 
     fn is_ambiguous_result(result: <Self::Cx as Cx>::Result) -> bool {
-        result == false
+        false // This fast path is annoying
     }
 
     fn propagate_ambiguity(
@@ -93,16 +100,11 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
     ) -> <Self::Cx as Cx>::Result {
         from_result
     }
-
-    fn step_is_coinductive(cx: Ctxt<'a>, input: Index) -> bool {
-        cx.graph.borrow().nodes[input.0].is_coinductive
-    }
 }
 
 #[derive(Debug, Default)]
 struct Node {
-    is_coinductive: bool,
-    children: Vec<Vec<Index>>,
+    children: Vec<Vec<(Index, GoalSource)>>,
 }
 
 #[derive(Debug, Default)]
@@ -122,12 +124,20 @@ impl Graph {
             for _ in 0..num_nodes {
                 let num_choices = rng.gen_range(0..=max_children);
                 nodes.push(Node {
-                    is_coinductive: rng.gen(),
                     children: iter::repeat_with(|| {
                         let num_children = rng.gen_range(0..=max_children);
-                        iter::repeat_with(|| Index(rng.gen_range(0..num_nodes)))
-                            .take(num_children)
-                            .collect()
+                        iter::repeat_with(|| {
+                            (
+                                Index(rng.gen_range(0..num_nodes)),
+                                if rng.gen() {
+                                    GoalSource::ImplWhereBound
+                                } else {
+                                    GoalSource::Misc
+                                },
+                            )
+                        })
+                        .take(num_children)
+                        .collect()
                     })
                     .take(num_choices)
                     .collect(),
@@ -143,7 +153,9 @@ impl Graph {
                 let mut has_changed = false;
                 for i in 0..num_nodes {
                     if reached[i] {
-                        for nested in graph.nodes[i].children.iter().flat_map(|c| c.iter()) {
+                        for (nested, _source) in
+                            graph.nodes[i].children.iter().flat_map(|c| c.iter())
+                        {
                             if !reached[nested.0] {
                                 has_changed = true;
                             }
@@ -171,7 +183,7 @@ impl Graph {
                 continue;
             }
             by_occurance.push(value);
-            for &nested in self.nodes[value.0]
+            for &(nested, _) in self.nodes[value.0]
                 .children
                 .iter()
                 .flat_map(|c| c.iter())
@@ -183,42 +195,45 @@ impl Graph {
 
         let mut nodes = vec![];
         for &i in &by_occurance {
-            let Node {
-                is_coinductive,
-                mut children,
-            } = mem::take(&mut self.nodes[i.0]);
-            for index in children.iter_mut().flat_map(|c| c.iter_mut()) {
+            let Node { mut children } = mem::take(&mut self.nodes[i.0]);
+            for (index, _source) in children.iter_mut().flat_map(|c| c.iter_mut()) {
                 *index = Index(by_occurance.iter().position(|&i| i == *index).unwrap());
             }
-            nodes.push(Node {
-                is_coinductive,
-                children,
-            });
+            nodes.push(Node { children });
         }
 
         Graph { nodes }
     }
 }
 
-#[tracing::instrument(level = "debug", skip(cx, search_graph), fields(coinductive = ?cx.graph.nodes[node.0].is_coinductive), ret)]
+#[tracing::instrument(level = "debug", skip(cx, search_graph), ret)]
 fn evaluate_canonical_goal<'a, const WITH_CACHE: bool>(
     cx: Ctxt<'a>,
     search_graph: &mut SearchGraph<CtxtDelegate<'a, WITH_CACHE>>,
     node: Index,
-) -> bool {
+    source: GoalSource,
+) -> Res {
     cx.cost
         .set(cx.cost.get() + 1 + search_graph.debug_current_depth());
-    search_graph.with_new_goal(cx, node, &mut (), |search_graph, _| {
+    search_graph.with_new_goal(cx, node, source, &mut (), |search_graph, _| {
         cx.cost.set(cx.cost.get() + 5);
-        let mut success = false;
+        let mut success = Res::Error;
+        let print_candidate = cx.graph.nodes[node.0].children.len() > 1;
+        if print_candidate {
+            cx.cost.set(cx.cost.get() + 5);
+        }
         for (i, c) in cx.graph.nodes[node.0].children.iter().enumerate() {
-            let span = debug_span!("candidate", ?i);
-            let _span = span.enter();
-            let result = c
-                .iter()
-                .all(|&index| evaluate_canonical_goal(cx, search_graph, index));
+            let span;
+            let _span;
+            if print_candidate {
+                span = debug_span!("candidate", ?i);
+                _span = span.enter();
+            }
+            let result = c.iter().fold(Res::Yes, |curr, &(index, source)| {
+                curr.min(evaluate_canonical_goal(cx, search_graph, index, source))
+            });
             debug!(?result);
-            success |= result;
+            success = success.max(result);
         }
         success
     })
@@ -234,6 +249,7 @@ pub(super) fn test_from_seed(
 ) {
     let mut rng = SmallRng::seed_from_u64(seed);
     let num_root_goals = rng.gen_range(0..num_nodes);
+    cost.set(cost.get() + num_root_goals * 10);
     let roots = iter::once(Index(0))
         .chain(iter::repeat_with(|| Index(rng.gen_range(0..num_nodes))).take(num_root_goals))
         .collect::<Vec<_>>();
@@ -242,26 +258,27 @@ pub(super) fn test_from_seed(
     debug!(?graph);
     let cx = Ctxt {
         cost,
-        recursion_limit,
         graph,
         cache: &Default::default(),
     };
-    let mut search_graph = SearchGraph::new(SolverMode::Normal);
+    let mut search_graph = SearchGraph::new(recursion_limit);
     for root in roots {
-        let res = evaluate_canonical_goal::<true>(cx, &mut search_graph, root);
-        assert_eq!(res, expected(recursion_limit, graph, root));
+        let res = evaluate_canonical_goal::<true>(cx, &mut search_graph, root, GoalSource::Root);
+        match (res, expected(num_nodes, graph, root)) {
+            (Res::Yes, Res::Yes) | (Res::Ambig, _) | (Res::Error, Res::Error) => {}
+            (res, exp) => panic!("res: {res:?}, expected: {exp:?}"),
+        }
         assert!(search_graph.is_empty());
     }
 }
 
-fn expected(recursion_limit: usize, graph: &Graph, node: Index) -> bool {
+fn expected(recursion_limit: usize, graph: &Graph, node: Index) -> Res {
     debug!(?node, "validate result");
     let cx = Ctxt {
         cost: &Cell::new(0),
-        recursion_limit,
         graph,
         cache: &Default::default(),
     };
-    let mut search_graph = SearchGraph::new(SolverMode::Normal);
-    evaluate_canonical_goal::<false>(cx, &mut search_graph, node)
+    let mut search_graph = SearchGraph::new(recursion_limit);
+    evaluate_canonical_goal::<false>(cx, &mut search_graph, node, GoalSource::Root)
 }

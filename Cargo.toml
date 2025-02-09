@@ -7,7 +7,7 @@ edition = "2021"
 debug-assertions = true
 
 [dependencies]
-rustc_type_ir = { path = "../rust1/compiler/rustc_type_ir" }
+rustc_type_ir = { default-features = false, path = "../rust1/compiler/rustc_type_ir" }
 rand = { version = "0.8", features = ["small_rng"] }
 
 tracing = "0.1"

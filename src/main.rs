@@ -57,8 +57,13 @@ pub fn with_tracing_logs<T>(action: impl FnOnce() -> T) -> T {
     tracing::subscriber::with_default(subscriber, action)
 }
 
-fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed: u64) {
-    use crate::provisional_cache::test_from_seed;
+fn do_stuff(
+    test_from_seed: fn(&Cell<usize>, usize, usize, usize, u64),
+    num_nodes: usize,
+    max_children: usize,
+    recursion_limit: usize,
+    seed: u64,
+) {
     if seed == 0 {
         std::panic::set_hook(Box::new(|_| ()));
         let min_cost = AtomicUsize::new(usize::MAX);
@@ -68,6 +73,12 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
                 s.spawn(|| {
                     let mut rng = thread_rng();
                     loop {
+                        let nth_try = num_tries.fetch_add(1, atomic::Ordering::Relaxed);
+                        if nth_try % 500_000 == 0 {
+                            print!("\r{nth_try:15}");
+                            let _ = std::io::stdout().flush();
+                        }
+
                         let cost = Cell::new(0);
                         let seed = rng.gen();
                         let res = catch_unwind(AssertUnwindSafe(|| {
@@ -77,16 +88,13 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
                         if res.is_err() {
                             let prev = min_cost.fetch_min(cost.get(), atomic::Ordering::Relaxed);
                             if prev > cost.get() {
-                                let i = num_tries.swap(0, atomic::Ordering::Relaxed);
-                                println!("\r{i:15}: {seed:20} cost: {:5} (new best)", cost.get());
+                                num_tries.store(0, atomic::Ordering::Relaxed);
+                                println!(
+                                    "\r{nth_try:15}: {seed:20} cost: {:5} (new best)",
+                                    cost.get()
+                                );
                                 continue;
                             }
-                        }
-
-                        let old = num_tries.fetch_add(1, atomic::Ordering::Relaxed);
-                        if old % 500000 == 0 {
-                            print!("\r{old:15}");
-                            let _ = std::io::stdout().flush();
                         }
                     }
                 });
@@ -106,8 +114,12 @@ fn do_stuff(num_nodes: usize, max_children: usize, recursion_limit: usize, seed:
 }
 
 fn main() {
-    // 8 3 20 4621883001622421945
-    // 8 3 20 15886988225882956210
-    // 6 3 10 6474412646705121343
-    do_stuff(4, 3, 11, 6338606554841105063);
+    // 5 4 4 9892490800677587509
+    do_stuff(
+        global_cache::test_from_seed,
+        8,
+        3,
+        7,
+        0,
+    );
 }

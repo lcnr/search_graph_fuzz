@@ -3,7 +3,8 @@ use rand::distributions::{Distribution, Standard};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rustc_type_ir::search_graph::*;
-use rustc_type_ir::solve::SolverMode;
+use rustc_type_ir::solve::inspect::GoalEvaluation;
+use rustc_type_ir::solve::GoalSource;
 use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
@@ -34,7 +35,6 @@ impl<'a> Drop for ValidationScope<'a> {
 struct Ctxt<'a> {
     cost: &'a Cell<usize>,
     disable_cache: &'a RefCell<DisableCache>,
-    recursion_limit: usize,
     graph: &'a Graph,
     cache: &'a RefCell<GlobalCache<Ctxt<'a>>>,
 }
@@ -52,8 +52,11 @@ impl<'a> Cx for Ctxt<'a> {
     fn with_cached_task<T>(self, task: impl FnOnce() -> T) -> (T, Self::DepNodeIndex) {
         (task(), ())
     }
-    fn with_global_cache<R>(self, _: SolverMode, f: impl FnOnce(&mut GlobalCache<Self>) -> R) -> R {
+    fn with_global_cache<R>(self, f: impl FnOnce(&mut GlobalCache<Self>) -> R) -> R {
         f(&mut *self.cache.borrow_mut())
+    }
+    fn evaluation_is_concurrent(&self) -> bool {
+        false
     }
 }
 
@@ -81,20 +84,18 @@ impl<'a> Delegate for CtxtDelegate<'a> {
         true
     }
 
-    fn recursion_limit(cx: Ctxt<'a>) -> usize {
-        cx.recursion_limit
-    }
+    const DIVIDE_AVAILABLE_DEPTH_ON_OVERFLOW: usize = 2;
 
-    fn initial_provisional_result(_cx: Ctxt<'a>, kind: CycleKind, _input: Index) -> Res {
+    fn initial_provisional_result(_cx: Ctxt<'a>, kind: PathKind, _input: Index) -> Res {
         match kind {
-            CycleKind::Coinductive => Res(0),
-            CycleKind::Inductive => Res(10),
+            PathKind::Coinductive => Res(0),
+            PathKind::Inductive => Res(10),
         }
     }
 
     fn is_initial_provisional_result(
         cx: Self::Cx,
-        kind: CycleKind,
+        kind: PathKind,
         input: <Self::Cx as Cx>::Input,
         result: <Self::Cx as Cx>::Result,
     ) -> bool {
@@ -119,10 +120,6 @@ impl<'a> Delegate for CtxtDelegate<'a> {
         from_result: <Self::Cx as Cx>::Result,
     ) -> <Self::Cx as Cx>::Result {
         from_result
-    }
-
-    fn step_is_coinductive(cx: Ctxt<'a>, input: Index) -> bool {
-        cx.graph.borrow().nodes[input.0].is_coinductive
     }
 }
 
@@ -184,11 +181,11 @@ impl Distribution<Cutoff> for Standard {
 struct Child {
     index: Index,
     cutoff: Cutoff,
+    source: GoalSource,
 }
 
 #[derive(Debug, Default)]
 struct Node {
-    is_coinductive: bool,
     initial: u64,
     children: Vec<Child>,
 }
@@ -210,11 +207,15 @@ impl Graph {
             for _ in 0..num_nodes {
                 let num_children = rng.gen_range(0..=max_children);
                 nodes.push(Node {
-                    is_coinductive: rng.gen(),
                     initial: rng.gen(),
                     children: iter::repeat_with(|| Child {
                         index: Index(rng.gen_range(0..num_nodes)),
                         cutoff: rng.gen(),
+                        source: if rng.gen() {
+                            GoalSource::ImplWhereBound
+                        } else {
+                            GoalSource::Misc
+                        },
                     })
                     .take(num_children)
                     .collect(),
@@ -256,7 +257,7 @@ impl Graph {
             let mut hasher = DefaultHasher::new();
             hasher.write_u64(node.initial);
             let current = Res::from_u64(hasher.finish());
-            while let Some(&Child { index: _, cutoff }) = node.children.first() {
+            while let Some(&Child { index: _, cutoff, source: _ }) = node.children.first() {
                 if cutoff.applies(current) {
                     node.children.remove(0);
                 } else {
@@ -282,16 +283,14 @@ impl Graph {
         let mut nodes = vec![];
         for &i in &by_occurance {
             let Node {
-                is_coinductive,
                 initial,
                 mut children,
             } = mem::take(&mut self.nodes[i.0]);
-            for Child { index, cutoff: _ } in children.iter_mut() {
+            for Child { index, cutoff: _, source: _ } in children.iter_mut() {
                 *index = Index(by_occurance.iter().position(|&i| i == *index).unwrap());
             }
             nodes.push(Node {
                 initial,
-                is_coinductive,
                 children,
             });
         }
@@ -300,20 +299,26 @@ impl Graph {
     }
 }
 
-#[tracing::instrument(level = "debug", skip(cx, search_graph), fields(coinductive = ?cx.graph.nodes[node.0].is_coinductive), ret)]
+#[tracing::instrument(level = "debug", skip(cx, search_graph), ret)]
 fn evaluate_canonical_goal<'a>(
     cx: Ctxt<'a>,
     search_graph: &mut SearchGraph<CtxtDelegate<'a>>,
     node: Index,
+    source: GoalSource,
 ) -> Res {
     cx.cost
         .set(cx.cost.get() + 1 + search_graph.debug_current_depth());
-    search_graph.with_new_goal(cx, node, &mut (), |search_graph, _| {
+    search_graph.with_new_goal(cx, node, source, &mut (), |search_graph, _| {
         cx.cost.set(cx.cost.get() + 5);
         let mut hasher = DefaultHasher::new();
         hasher.write_u64(cx.graph.nodes[node.0].initial);
         let mut trivial_skip = true;
-        for &Child { index, cutoff } in cx.graph.nodes[node.0].children.iter() {
+        for &Child {
+            index,
+            cutoff,
+            source,
+        } in cx.graph.nodes[node.0].children.iter()
+        {
             let current = Res::from_u64(hasher.finish());
             if cutoff.applies(current) {
                 if !trivial_skip {
@@ -324,7 +329,7 @@ fn evaluate_canonical_goal<'a>(
                 }
             } else {
                 trivial_skip = false;
-                let result = evaluate_canonical_goal(cx, search_graph, index);
+                let result = evaluate_canonical_goal(cx, search_graph, index, source);
                 hasher.write_u8(result.0);
             }
         }
@@ -356,14 +361,13 @@ pub(super) fn test_from_seed(
     let cx = Ctxt {
         cost,
         disable_cache: &RefCell::new(disable_cache),
-        recursion_limit,
         graph: &Graph::generate(num_nodes, max_children, &roots, &mut rng),
         cache: &Default::default(),
     };
-    let mut search_graph = SearchGraph::new(SolverMode::Normal);
+    let mut search_graph = SearchGraph::new(recursion_limit);
 
     for node in roots {
-        evaluate_canonical_goal(cx, &mut search_graph, node);
+        evaluate_canonical_goal(cx, &mut search_graph, node, GoalSource::Root);
         assert!(search_graph.is_empty());
         assert!(cx.disable_cache.borrow().stack.is_empty());
     }
