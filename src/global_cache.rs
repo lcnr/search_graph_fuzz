@@ -1,11 +1,8 @@
-use core::num;
 use rand::distributions::{Distribution, Standard};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rustc_type_ir::search_graph::*;
-use rustc_type_ir::solve::inspect::GoalEvaluation;
 use rustc_type_ir::solve::GoalSource;
-use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::fmt::Write;

@@ -85,11 +85,11 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
         Res::Ambig
     }
 
-    fn on_fixpoint_overflow(cx: Ctxt<'a>, _input: Index) -> Res {
+    fn on_fixpoint_overflow(_cx: Ctxt<'a>, _input: Index) -> Res {
         Res::Ambig
     }
 
-    fn is_ambiguous_result(result: <Self::Cx as Cx>::Result) -> bool {
+    fn is_ambiguous_result(_: <Self::Cx as Cx>::Result) -> bool {
         false // This fast path is annoying
     }
 
