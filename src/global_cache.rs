@@ -178,7 +178,7 @@ impl Distribution<Cutoff> for Standard {
 struct Child {
     index: Index,
     cutoff: Cutoff,
-    source: GoalSource,
+    step_kind: PathKind,
 }
 
 #[derive(Debug, Default)]
@@ -208,10 +208,10 @@ impl Graph {
                     children: iter::repeat_with(|| Child {
                         index: Index(rng.gen_range(0..num_nodes)),
                         cutoff: rng.gen(),
-                        source: if rng.gen() {
-                            GoalSource::ImplWhereBound
+                        step_kind: if rng.gen() {
+                            PathKind::Coinductive
                         } else {
-                            GoalSource::Misc
+                            PathKind::Inductive
                         },
                     })
                     .take(num_children)
@@ -254,7 +254,12 @@ impl Graph {
             let mut hasher = DefaultHasher::new();
             hasher.write_u64(node.initial);
             let current = Res::from_u64(hasher.finish());
-            while let Some(&Child { index: _, cutoff, source: _ }) = node.children.first() {
+            while let Some(&Child {
+                index: _,
+                cutoff,
+                step_kind: _,
+            }) = node.children.first()
+            {
                 if cutoff.applies(current) {
                     node.children.remove(0);
                 } else {
@@ -283,13 +288,15 @@ impl Graph {
                 initial,
                 mut children,
             } = mem::take(&mut self.nodes[i.0]);
-            for Child { index, cutoff: _, source: _ } in children.iter_mut() {
+            for Child {
+                index,
+                cutoff: _,
+                step_kind: _,
+            } in children.iter_mut()
+            {
                 *index = Index(by_occurance.iter().position(|&i| i == *index).unwrap());
             }
-            nodes.push(Node {
-                initial,
-                children,
-            });
+            nodes.push(Node { initial, children });
         }
 
         Graph { nodes }
@@ -301,38 +308,44 @@ fn evaluate_canonical_goal<'a>(
     cx: Ctxt<'a>,
     search_graph: &mut SearchGraph<CtxtDelegate<'a>>,
     node: Index,
-    source: GoalSource,
+    step_kind_from_parent: PathKind,
 ) -> Res {
     cx.cost
         .set(cx.cost.get() + 1 + search_graph.debug_current_depth());
-    search_graph.with_new_goal(cx, node, source, &mut (), |search_graph, _| {
-        cx.cost.set(cx.cost.get() + 5);
-        let mut hasher = DefaultHasher::new();
-        hasher.write_u64(cx.graph.nodes[node.0].initial);
-        let mut trivial_skip = true;
-        for &Child {
-            index,
-            cutoff,
-            source,
-        } in cx.graph.nodes[node.0].children.iter()
-        {
-            let current = Res::from_u64(hasher.finish());
-            if cutoff.applies(current) {
-                if !trivial_skip {
-                    cx.cost.set(cx.cost.get() + 1);
-                    tracing::debug!(?index, "skip nested");
+    search_graph.with_new_goal(
+        cx,
+        node,
+        step_kind_from_parent,
+        &mut (),
+        |search_graph, _| {
+            cx.cost.set(cx.cost.get() + 5);
+            let mut hasher = DefaultHasher::new();
+            hasher.write_u64(cx.graph.nodes[node.0].initial);
+            let mut trivial_skip = true;
+            for &Child {
+                index,
+                cutoff,
+                step_kind,
+            } in cx.graph.nodes[node.0].children.iter()
+            {
+                let current = Res::from_u64(hasher.finish());
+                if cutoff.applies(current) {
+                    if !trivial_skip {
+                        cx.cost.set(cx.cost.get() + 1);
+                        tracing::debug!(?index, "skip nested");
+                    } else {
+                        unreachable!()
+                    }
                 } else {
-                    unreachable!()
+                    trivial_skip = false;
+                    let result = evaluate_canonical_goal(cx, search_graph, index, step_kind);
+                    hasher.write_u8(result.0);
                 }
-            } else {
-                trivial_skip = false;
-                let result = evaluate_canonical_goal(cx, search_graph, index, source);
-                hasher.write_u8(result.0);
             }
-        }
 
-        Res::from_u64(hasher.finish())
-    })
+            Res::from_u64(hasher.finish())
+        },
+    )
 }
 
 #[allow(unused)]
@@ -364,7 +377,7 @@ pub(super) fn test_from_seed(
     let mut search_graph = SearchGraph::new(recursion_limit);
 
     for node in roots {
-        evaluate_canonical_goal(cx, &mut search_graph, node, GoalSource::Root);
+        evaluate_canonical_goal(cx, &mut search_graph, node, PathKind::Inductive);
         assert!(search_graph.is_empty());
         assert!(cx.disable_cache.borrow().stack.is_empty());
     }

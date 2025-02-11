@@ -114,11 +114,5 @@ fn do_stuff(
 }
 
 fn main() {
-    do_stuff(
-        global_cache::test_from_seed,
-        8,
-        4,
-        7,
-        0,
-    );
+    do_stuff(provisional_cache::test_from_seed, 5, 3, 4, 0);
 }

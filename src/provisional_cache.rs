@@ -103,7 +103,7 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
 
 #[derive(Debug, Default)]
 struct Node {
-    children: Vec<Vec<(Index, GoalSource)>>,
+    children: Vec<Vec<(Index, PathKind)>>,
 }
 
 #[derive(Debug, Default)]
@@ -129,9 +129,9 @@ impl Graph {
                             (
                                 Index(rng.gen_range(0..num_nodes)),
                                 if rng.gen() {
-                                    GoalSource::ImplWhereBound
+                                    PathKind::Coinductive
                                 } else {
-                                    GoalSource::Misc
+                                    PathKind::Inductive
                                 },
                             )
                         })
@@ -210,32 +210,45 @@ fn evaluate_canonical_goal<'a, const WITH_CACHE: bool>(
     cx: Ctxt<'a>,
     search_graph: &mut SearchGraph<CtxtDelegate<'a, WITH_CACHE>>,
     node: Index,
-    source: GoalSource,
+    step_kind_from_parent: PathKind,
 ) -> Res {
     cx.cost
         .set(cx.cost.get() + 1 + search_graph.debug_current_depth());
-    search_graph.with_new_goal(cx, node, source, &mut (), |search_graph, _| {
-        cx.cost.set(cx.cost.get() + 5);
-        let mut success = Res::Error;
-        let print_candidate = cx.graph.nodes[node.0].children.len() > 1;
-        if print_candidate {
+    search_graph.with_new_goal(
+        cx,
+        node,
+        step_kind_from_parent,
+        &mut (),
+        |search_graph, _| {
             cx.cost.set(cx.cost.get() + 5);
-        }
-        for (i, c) in cx.graph.nodes[node.0].children.iter().enumerate() {
-            let span;
-            let _span;
+            let mut success = Res::Error;
+            let print_candidate = cx.graph.nodes[node.0].children.len() > 1;
             if print_candidate {
-                span = debug_span!("candidate", ?i);
-                _span = span.enter();
+                cx.cost.set(cx.cost.get() + 5);
             }
-            let result = c.iter().fold(Res::Yes, |curr, &(index, source)| {
-                curr.min(evaluate_canonical_goal(cx, search_graph, index, source))
-            });
-            debug!(?result);
-            success = success.max(result);
-        }
-        success
-    })
+            for (i, c) in cx.graph.nodes[node.0].children.iter().enumerate() {
+                let span;
+                let _span;
+                if print_candidate {
+                    span = debug_span!("candidate", ?i);
+                    _span = span.enter();
+                }
+                let result = c
+                    .iter()
+                    .fold(Res::Yes, |curr, &(index, step_kind_from_parent)| {
+                        curr.min(evaluate_canonical_goal(
+                            cx,
+                            search_graph,
+                            index,
+                            step_kind_from_parent,
+                        ))
+                    });
+                debug!(?result);
+                success = success.max(result);
+            }
+            success
+        },
+    )
 }
 
 #[allow(unused)]
@@ -262,7 +275,7 @@ pub(super) fn test_from_seed(
     };
     let mut search_graph = SearchGraph::new(recursion_limit);
     for root in roots {
-        let res = evaluate_canonical_goal::<true>(cx, &mut search_graph, root, GoalSource::Root);
+        let res = evaluate_canonical_goal::<true>(cx, &mut search_graph, root, PathKind::Inductive);
         match (res, expected(num_nodes, graph, root)) {
             (Res::Yes, Res::Yes) | (Res::Ambig, _) | (Res::Error, Res::Error) => {}
             (res, exp) => panic!("res: {res:?}, expected: {exp:?}"),
@@ -279,5 +292,5 @@ fn expected(recursion_limit: usize, graph: &Graph, node: Index) -> Res {
         cache: &Default::default(),
     };
     let mut search_graph = SearchGraph::new(recursion_limit);
-    evaluate_canonical_goal::<false>(cx, &mut search_graph, node, GoalSource::Root)
+    evaluate_canonical_goal::<false>(cx, &mut search_graph, node, PathKind::Inductive)
 }
