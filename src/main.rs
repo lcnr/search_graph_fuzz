@@ -1,5 +1,6 @@
 #![feature(never_type)]
 use rand::{thread_rng, Rng};
+use rustc_type_ir::search_graph::PathKind;
 use std::cell::Cell;
 use std::fmt::Write;
 use std::io::Write as _;
@@ -18,6 +19,15 @@ impl std::fmt::Debug for Index {
         } else {
             write!(f, "{}", self.0)
         }
+    }
+}
+
+fn random_path_kind(rng: &mut impl Rng) -> PathKind {
+    match rng.gen_range(0..3) {
+        0 => PathKind::Coinductive,
+        1 => PathKind::Unknown,
+        2 => PathKind::Inductive,
+        _ => unreachable!(),
     }
 }
 
@@ -114,5 +124,6 @@ fn do_stuff(
 }
 
 fn main() {
-    do_stuff(provisional_cache::test_from_seed, 5, 3, 4, 0);
+    //do_stuff(global_cache::test_from_seed, 8, 4, 7, 0);
+    do_stuff(provisional_cache::test_from_seed, 5, 3, 4, 15029590563012030562);
 }

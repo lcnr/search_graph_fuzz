@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 use std::mem;
 use tracing::{debug, debug_span};
 
-use crate::Index;
+use crate::{random_path_kind, Index};
 
 #[derive(Clone, Copy)]
 struct Ctxt<'a> {
@@ -67,6 +67,7 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
     fn initial_provisional_result(_cx: Ctxt<'a>, kind: PathKind, _input: Index) -> Res {
         match kind {
             PathKind::Coinductive => Res::Yes,
+            PathKind::Unknown => Res::Ambig,
             PathKind::Inductive => Res::Error,
         }
     }
@@ -126,14 +127,7 @@ impl Graph {
                     children: iter::repeat_with(|| {
                         let num_children = rng.gen_range(0..=max_children);
                         iter::repeat_with(|| {
-                            (
-                                Index(rng.gen_range(0..num_nodes)),
-                                if rng.gen() {
-                                    PathKind::Coinductive
-                                } else {
-                                    PathKind::Inductive
-                                },
-                            )
+                            (Index(rng.gen_range(0..num_nodes)), random_path_kind(rng))
                         })
                         .take(num_children)
                         .collect()

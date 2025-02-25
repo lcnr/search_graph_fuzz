@@ -86,7 +86,8 @@ impl<'a> Delegate for CtxtDelegate<'a> {
     fn initial_provisional_result(_cx: Ctxt<'a>, kind: PathKind, _input: Index) -> Res {
         match kind {
             PathKind::Coinductive => Res(0),
-            PathKind::Inductive => Res(10),
+            PathKind::Unknown => Res(10),
+            PathKind::Inductive => Res(15),
         }
     }
 
@@ -208,11 +209,7 @@ impl Graph {
                     children: iter::repeat_with(|| Child {
                         index: Index(rng.gen_range(0..num_nodes)),
                         cutoff: rng.gen(),
-                        step_kind: if rng.gen() {
-                            PathKind::Coinductive
-                        } else {
-                            PathKind::Inductive
-                        },
+                        step_kind: crate::random_path_kind(rng),
                     })
                     .take(num_children)
                     .collect(),
