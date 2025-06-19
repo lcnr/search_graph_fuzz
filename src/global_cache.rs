@@ -375,7 +375,7 @@ pub(super) fn test_from_seed(
 
     for node in roots {
         evaluate_canonical_goal(cx, &mut search_graph, node, PathKind::Inductive);
-        assert!(search_graph.is_empty(), "{search_graph:#?}");
+        assert!(search_graph.is_empty(), "not empty search graph: {:?}", search_graph.debug_stack());
         assert!(cx.disable_cache.borrow().stack.is_empty());
     }
 }
