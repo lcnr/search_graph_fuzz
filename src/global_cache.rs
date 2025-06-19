@@ -314,7 +314,7 @@ fn evaluate_canonical_goal<'a>(
         node,
         step_kind_from_parent,
         &mut (),
-        |search_graph, _| {
+        |search_graph, cx, node, _| {
             cx.cost.set(cx.cost.get() + 5);
             let mut hasher = DefaultHasher::new();
             hasher.write_u64(cx.graph.nodes[node.0].initial);
@@ -375,7 +375,7 @@ pub(super) fn test_from_seed(
 
     for node in roots {
         evaluate_canonical_goal(cx, &mut search_graph, node, PathKind::Inductive);
-        assert!(search_graph.is_empty());
+        assert!(search_graph.is_empty(), "{search_graph:#?}");
         assert!(cx.disable_cache.borrow().stack.is_empty());
     }
 }

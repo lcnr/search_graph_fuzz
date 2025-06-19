@@ -213,7 +213,7 @@ fn evaluate_canonical_goal<'a, const WITH_CACHE: bool>(
         node,
         step_kind_from_parent,
         &mut (),
-        |search_graph, _| {
+        |search_graph, cx, node, _| {
             cx.cost.set(cx.cost.get() + 5);
             let mut success = Res::Error;
             let print_candidate = cx.graph.nodes[node.0].children.len() > 1;
