@@ -207,14 +207,14 @@ fn evaluate_canonical_goal<'a, const WITH_CACHE: bool>(
     step_kind_from_parent: PathKind,
 ) -> Res {
     cx.cost
-        .set(cx.cost.get() + 1 + search_graph.debug_current_depth());
+        .set(cx.cost.get() + 1);
     search_graph.with_new_goal(
         cx,
         node,
         step_kind_from_parent,
         &mut (),
         |search_graph, cx, node, _| {
-            cx.cost.set(cx.cost.get() + 5);
+            cx.cost.set(cx.cost.get() + 5 + search_graph.debug_current_depth());
             let mut success = Res::Error;
             let print_candidate = cx.graph.nodes[node.0].children.len() > 1;
             if print_candidate {

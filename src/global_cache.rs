@@ -308,14 +308,14 @@ fn evaluate_canonical_goal<'a>(
     step_kind_from_parent: PathKind,
 ) -> Res {
     cx.cost
-        .set(cx.cost.get() + 1 + search_graph.debug_current_depth());
+        .set(cx.cost.get() + 1);
     search_graph.with_new_goal(
         cx,
         node,
         step_kind_from_parent,
         &mut (),
         |search_graph, cx, node, _| {
-            cx.cost.set(cx.cost.get() + 5);
+            cx.cost.set(cx.cost.get() + 5 + search_graph.debug_current_depth());
             let mut hasher = DefaultHasher::new();
             hasher.write_u64(cx.graph.nodes[node.0].initial);
             let mut trivial_skip = true;
