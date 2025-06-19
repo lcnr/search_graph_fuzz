@@ -103,8 +103,14 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
 }
 
 #[derive(Debug, Default)]
+struct Candidate {
+    flipped: bool,
+    children: Vec<(Index, PathKind)>,
+}
+
+#[derive(Debug, Default)]
 struct Node {
-    children: Vec<Vec<(Index, PathKind)>>,
+    candidates: Vec<Candidate>,
 }
 
 #[derive(Debug, Default)]
@@ -124,13 +130,16 @@ impl Graph {
             for _ in 0..num_nodes {
                 let num_choices = rng.gen_range(0..=max_children);
                 nodes.push(Node {
-                    children: iter::repeat_with(|| {
+                    candidates: iter::repeat_with(|| {
                         let num_children = rng.gen_range(0..=max_children);
-                        iter::repeat_with(|| {
-                            (Index(rng.gen_range(0..num_nodes)), random_path_kind(rng))
-                        })
-                        .take(num_children)
-                        .collect()
+                        Candidate {
+                            flipped: rng.gen(),
+                            children: iter::repeat_with(|| {
+                                (Index(rng.gen_range(0..num_nodes)), random_path_kind(rng))
+                            })
+                            .take(num_children)
+                            .collect(),
+                        }
                     })
                     .take(num_choices)
                     .collect(),
@@ -146,8 +155,10 @@ impl Graph {
                 let mut has_changed = false;
                 for i in 0..num_nodes {
                     if reached[i] {
-                        for (nested, _source) in
-                            graph.nodes[i].children.iter().flat_map(|c| c.iter())
+                        for (nested, _source) in graph.nodes[i]
+                            .candidates
+                            .iter()
+                            .flat_map(|c| c.children.iter())
                         {
                             if !reached[nested.0] {
                                 has_changed = true;
@@ -177,9 +188,9 @@ impl Graph {
             }
             by_occurance.push(value);
             for &(nested, _) in self.nodes[value.0]
-                .children
+                .candidates
                 .iter()
-                .flat_map(|c| c.iter())
+                .flat_map(|c| c.children.iter())
                 .rev()
             {
                 queue.push(nested);
@@ -188,11 +199,11 @@ impl Graph {
 
         let mut nodes = vec![];
         for &i in &by_occurance {
-            let Node { mut children } = mem::take(&mut self.nodes[i.0]);
-            for (index, _source) in children.iter_mut().flat_map(|c| c.iter_mut()) {
+            let Node { mut candidates } = mem::take(&mut self.nodes[i.0]);
+            for (index, _source) in candidates.iter_mut().flat_map(|c| c.children.iter_mut()) {
                 *index = Index(by_occurance.iter().position(|&i| i == *index).unwrap());
             }
-            nodes.push(Node { children });
+            nodes.push(Node { candidates });
         }
 
         Graph { nodes }
@@ -206,43 +217,59 @@ fn evaluate_canonical_goal<'a, const WITH_CACHE: bool>(
     node: Index,
     step_kind_from_parent: PathKind,
 ) -> Res {
-    cx.cost
-        .set(cx.cost.get() + 1);
-    search_graph.with_new_goal(
-        cx,
-        node,
-        step_kind_from_parent,
-        &mut (),
-        |search_graph, cx, node, _| {
-            cx.cost.set(cx.cost.get() + 5 + search_graph.debug_current_depth());
-            let mut success = Res::Error;
-            let print_candidate = cx.graph.nodes[node.0].children.len() > 1;
-            if print_candidate {
-                cx.cost.set(cx.cost.get() + 5);
-            }
-            for (i, c) in cx.graph.nodes[node.0].children.iter().enumerate() {
-                let span;
-                let _span;
+    cx.cost.set(cx.cost.get() + 1);
+    search_graph
+        .with_new_goal(
+            cx,
+            node,
+            step_kind_from_parent,
+            &mut (),
+            |search_graph, cx, node, _| {
+                cx.cost
+                    .set(cx.cost.get() + 5 + search_graph.debug_current_depth());
+                let mut success = Res::Error;
+                let print_candidate = cx.graph.nodes[node.0].candidates.len() > 1;
                 if print_candidate {
-                    span = debug_span!("candidate", ?i);
-                    _span = span.enter();
+                    cx.cost.set(cx.cost.get() + 5);
                 }
-                let result = c
-                    .iter()
-                    .fold(Res::Yes, |curr, &(index, step_kind_from_parent)| {
-                        curr.min(evaluate_canonical_goal(
-                            cx,
-                            search_graph,
-                            index,
-                            step_kind_from_parent,
-                        ))
-                    });
-                debug!(?result);
-                success = success.max(result);
-            }
-            success
-        },
-    ).1
+                for (i, Candidate { flipped, children }) in
+                    cx.graph.nodes[node.0].candidates.iter().enumerate()
+                {
+                    let span;
+                    let _span;
+                    if print_candidate {
+                        span = debug_span!("candidate", ?i);
+                        _span = span.enter();
+                    }
+                    let result =
+                        children
+                            .iter()
+                            .fold(Res::Yes, |curr, &(index, step_kind_from_parent)| {
+                                curr.min(evaluate_canonical_goal(
+                                    cx,
+                                    search_graph,
+                                    index,
+                                    step_kind_from_parent,
+                                ))
+                            });
+                    let result = if *flipped {
+                        debug!("flip result");
+                        cx.cost.set(cx.cost.get() + 1);
+                        match result {
+                            Res::Yes => Res::Error,
+                            Res::Ambig => Res::Ambig,
+                            Res::Error => Res::Yes,
+                        }
+                    } else {
+                        result
+                    };
+                    debug!(?result);
+                    success = success.max(result);
+                }
+                success
+            },
+        )
+        .1
 }
 
 #[allow(unused)]

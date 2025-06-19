@@ -307,42 +307,44 @@ fn evaluate_canonical_goal<'a>(
     node: Index,
     step_kind_from_parent: PathKind,
 ) -> Res {
-    cx.cost
-        .set(cx.cost.get() + 1);
-    search_graph.with_new_goal(
-        cx,
-        node,
-        step_kind_from_parent,
-        &mut (),
-        |search_graph, cx, node, _| {
-            cx.cost.set(cx.cost.get() + 5 + search_graph.debug_current_depth());
-            let mut hasher = DefaultHasher::new();
-            hasher.write_u64(cx.graph.nodes[node.0].initial);
-            let mut trivial_skip = true;
-            for &Child {
-                index,
-                cutoff,
-                step_kind,
-            } in cx.graph.nodes[node.0].children.iter()
-            {
-                let current = Res::from_u64(hasher.finish());
-                if cutoff.applies(current) {
-                    if !trivial_skip {
-                        cx.cost.set(cx.cost.get() + 1);
-                        tracing::debug!(?index, "skip nested");
+    cx.cost.set(cx.cost.get() + 1);
+    search_graph
+        .with_new_goal(
+            cx,
+            node,
+            step_kind_from_parent,
+            &mut (),
+            |search_graph, cx, node, _| {
+                cx.cost
+                    .set(cx.cost.get() + 5 + search_graph.debug_current_depth());
+                let mut hasher = DefaultHasher::new();
+                hasher.write_u64(cx.graph.nodes[node.0].initial);
+                let mut trivial_skip = true;
+                for &Child {
+                    index,
+                    cutoff,
+                    step_kind,
+                } in cx.graph.nodes[node.0].children.iter()
+                {
+                    let current = Res::from_u64(hasher.finish());
+                    if cutoff.applies(current) {
+                        if !trivial_skip {
+                            cx.cost.set(cx.cost.get() + 1);
+                            tracing::debug!(?index, "skip nested");
+                        } else {
+                            unreachable!()
+                        }
                     } else {
-                        unreachable!()
+                        trivial_skip = false;
+                        let result = evaluate_canonical_goal(cx, search_graph, index, step_kind);
+                        hasher.write_u8(result.0);
                     }
-                } else {
-                    trivial_skip = false;
-                    let result = evaluate_canonical_goal(cx, search_graph, index, step_kind);
-                    hasher.write_u8(result.0);
                 }
-            }
 
-            Res::from_u64(hasher.finish())
-        },
-    ).1
+                Res::from_u64(hasher.finish())
+            },
+        )
+        .1
 }
 
 #[allow(unused)]
@@ -375,7 +377,11 @@ pub(super) fn test_from_seed(
 
     for node in roots {
         evaluate_canonical_goal(cx, &mut search_graph, node, PathKind::Inductive);
-        assert!(search_graph.is_empty(), "not empty search graph: {:?}", search_graph.debug_stack());
+        assert!(
+            search_graph.is_empty(),
+            "not empty search graph: {:?}",
+            search_graph.debug_stack()
+        );
         assert!(cx.disable_cache.borrow().stack.is_empty());
     }
 }
