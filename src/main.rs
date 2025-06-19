@@ -125,6 +125,9 @@ fn do_stuff(
 
 fn main() {
     unsafe { backtrace_on_stack_overflow::enable() };
-    do_stuff(global_cache::test_from_seed, 8, 4, 7, 12347071260488512581);
-    // do_stuff(provisional_cache::test_from_seed, 5, 3, 4, 0);
+    //do_stuff(global_cache::test_from_seed, 4, 2, 10, 0);
+    // 6 3 7 17526345553800235939
+    // do_stuff(global_cache::test_from_seed, 6, 3, 7, 0);
+    //  do_stuff(provisional_cache::test_from_seed, 3, 2, 4, 17551627865259663986);
+    do_stuff(provisional_cache::test_from_seed, 3, 2, 4, 0);
 }

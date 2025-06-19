@@ -242,7 +242,7 @@ fn evaluate_canonical_goal<'a, const WITH_CACHE: bool>(
             }
             success
         },
-    )
+    ).1
 }
 
 #[allow(unused)]

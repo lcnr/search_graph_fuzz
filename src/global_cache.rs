@@ -342,7 +342,7 @@ fn evaluate_canonical_goal<'a>(
 
             Res::from_u64(hasher.finish())
         },
-    )
+    ).1
 }
 
 #[allow(unused)]
