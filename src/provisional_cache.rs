@@ -81,7 +81,7 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
         Self::initial_provisional_result(cx, kind, input) == result
     }
 
-    fn on_stack_overflow(_cx: Ctxt<'a>, _inspect: &mut (), _input: Index) -> Res {
+    fn on_stack_overflow(_cx: Ctxt<'a>, _input: Index, _inspect: &mut ()) -> Res {
         Res::Ambig
     }
 
@@ -99,6 +99,54 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
         from_result: <Self::Cx as Cx>::Result,
     ) -> <Self::Cx as Cx>::Result {
         from_result
+    }
+
+    fn compute_goal(
+        search_graph: &mut SearchGraph<Self>,
+        cx: Self::Cx,
+        input: <Self::Cx as Cx>::Input,
+        inspect: &mut Self::ProofTreeBuilder,
+    ) -> <Self::Cx as Cx>::Result {
+        cx.cost
+            .set(cx.cost.get() + 5 + search_graph.debug_current_depth());
+        let mut success = Res::Error;
+        let print_candidate = cx.graph.nodes[input.0].candidates.len() > 1;
+        if print_candidate {
+            cx.cost.set(cx.cost.get() + 5);
+        }
+        for (i, Candidate { flipped, children }) in
+            cx.graph.nodes[input.0].candidates.iter().enumerate()
+        {
+            let span;
+            let _span;
+            if print_candidate {
+                span = debug_span!("candidate", ?i);
+                _span = span.enter();
+            }
+            let result = children
+                .iter()
+                .fold(Res::Yes, |curr, &(index, step_kind_from_parent)| {
+                    curr.min(
+                        search_graph
+                            .evaluate_goal(cx, index, step_kind_from_parent, &mut ())
+                            .1,
+                    )
+                });
+            let result = if *flipped {
+                debug!("flip result");
+                cx.cost.set(cx.cost.get() + 1);
+                match result {
+                    Res::Yes => Res::Error,
+                    Res::Ambig => Res::Ambig,
+                    Res::Error => Res::Yes,
+                }
+            } else {
+                result
+            };
+            debug!(?result);
+            success = success.max(result);
+        }
+        success
     }
 }
 
@@ -210,68 +258,6 @@ impl Graph {
     }
 }
 
-#[tracing::instrument(level = "debug", skip(cx, search_graph), ret)]
-fn evaluate_canonical_goal<'a, const WITH_CACHE: bool>(
-    cx: Ctxt<'a>,
-    search_graph: &mut SearchGraph<CtxtDelegate<'a, WITH_CACHE>>,
-    node: Index,
-    step_kind_from_parent: PathKind,
-) -> Res {
-    cx.cost.set(cx.cost.get() + 1);
-    search_graph
-        .with_new_goal(
-            cx,
-            node,
-            step_kind_from_parent,
-            &mut (),
-            |search_graph, cx, node, _| {
-                cx.cost
-                    .set(cx.cost.get() + 5 + search_graph.debug_current_depth());
-                let mut success = Res::Error;
-                let print_candidate = cx.graph.nodes[node.0].candidates.len() > 1;
-                if print_candidate {
-                    cx.cost.set(cx.cost.get() + 5);
-                }
-                for (i, Candidate { flipped, children }) in
-                    cx.graph.nodes[node.0].candidates.iter().enumerate()
-                {
-                    let span;
-                    let _span;
-                    if print_candidate {
-                        span = debug_span!("candidate", ?i);
-                        _span = span.enter();
-                    }
-                    let result =
-                        children
-                            .iter()
-                            .fold(Res::Yes, |curr, &(index, step_kind_from_parent)| {
-                                curr.min(evaluate_canonical_goal(
-                                    cx,
-                                    search_graph,
-                                    index,
-                                    step_kind_from_parent,
-                                ))
-                            });
-                    let result = if *flipped {
-                        debug!("flip result");
-                        cx.cost.set(cx.cost.get() + 1);
-                        match result {
-                            Res::Yes => Res::Error,
-                            Res::Ambig => Res::Ambig,
-                            Res::Error => Res::Yes,
-                        }
-                    } else {
-                        result
-                    };
-                    debug!(?result);
-                    success = success.max(result);
-                }
-                success
-            },
-        )
-        .1
-}
-
 #[allow(unused)]
 pub(super) fn test_from_seed(
     cost: &Cell<usize>,
@@ -294,9 +280,11 @@ pub(super) fn test_from_seed(
         graph,
         cache: &Default::default(),
     };
-    let mut search_graph = SearchGraph::new(recursion_limit);
+    let mut search_graph: SearchGraph<CtxtDelegate<false>> = SearchGraph::new(recursion_limit);
     for root in roots {
-        let res = evaluate_canonical_goal::<true>(cx, &mut search_graph, root, PathKind::Inductive);
+        let res = search_graph
+            .evaluate_goal(cx, root, PathKind::Inductive, &mut ())
+            .1;
         match (res, expected(num_nodes, graph, root)) {
             (Res::Yes, Res::Yes) | (Res::Ambig, _) | (Res::Error, Res::Error) => {}
             (res, exp) => panic!("res: {res:?}, expected: {exp:?}"),
@@ -312,6 +300,8 @@ fn expected(recursion_limit: usize, graph: &Graph, node: Index) -> Res {
         graph,
         cache: &Default::default(),
     };
-    let mut search_graph = SearchGraph::new(recursion_limit);
-    evaluate_canonical_goal::<false>(cx, &mut search_graph, node, PathKind::Inductive)
+    let mut search_graph: SearchGraph<CtxtDelegate<false>> = SearchGraph::new(recursion_limit);
+    search_graph
+        .evaluate_goal(cx, node, PathKind::Inductive, &mut ())
+        .1
 }

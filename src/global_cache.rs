@@ -100,7 +100,7 @@ impl<'a> Delegate for CtxtDelegate<'a> {
         Self::initial_provisional_result(cx, kind, input) == result
     }
 
-    fn on_stack_overflow(_cx: Ctxt<'a>, _inspect: &mut (), _input: Index) -> Res {
+    fn on_stack_overflow(_cx: Ctxt<'a>, _input: Index, _inspect: &mut ()) -> Res {
         Res(11)
     }
 
@@ -118,6 +118,41 @@ impl<'a> Delegate for CtxtDelegate<'a> {
         from_result: <Self::Cx as Cx>::Result,
     ) -> <Self::Cx as Cx>::Result {
         from_result
+    }
+
+    fn compute_goal(
+        search_graph: &mut SearchGraph<Self>,
+        cx: Self::Cx,
+        input: <Self::Cx as Cx>::Input,
+        inspect: &mut Self::ProofTreeBuilder,
+    ) -> <Self::Cx as Cx>::Result {
+        cx.cost
+            .set(cx.cost.get() + 5 + search_graph.debug_current_depth());
+        let mut hasher = DefaultHasher::new();
+        hasher.write_u64(cx.graph.nodes[input.0].initial);
+        let mut trivial_skip = true;
+        for &Child {
+            index,
+            cutoff,
+            step_kind,
+        } in cx.graph.nodes[input.0].children.iter()
+        {
+            let current = Res::from_u64(hasher.finish());
+            if cutoff.applies(current) {
+                if !trivial_skip {
+                    cx.cost.set(cx.cost.get() + 1);
+                    tracing::debug!(?index, "skip nested");
+                } else {
+                    unreachable!()
+                }
+            } else {
+                trivial_skip = false;
+                let result = search_graph.evaluate_goal(cx, index, step_kind, inspect);
+                hasher.write_u8(result.1 .0);
+            }
+        }
+
+        Res::from_u64(hasher.finish())
     }
 }
 
@@ -300,53 +335,6 @@ impl Graph {
     }
 }
 
-#[tracing::instrument(level = "debug", skip(cx, search_graph), ret)]
-fn evaluate_canonical_goal<'a>(
-    cx: Ctxt<'a>,
-    search_graph: &mut SearchGraph<CtxtDelegate<'a>>,
-    node: Index,
-    step_kind_from_parent: PathKind,
-) -> Res {
-    cx.cost.set(cx.cost.get() + 1);
-    search_graph
-        .with_new_goal(
-            cx,
-            node,
-            step_kind_from_parent,
-            &mut (),
-            |search_graph, cx, node, _| {
-                cx.cost
-                    .set(cx.cost.get() + 5 + search_graph.debug_current_depth());
-                let mut hasher = DefaultHasher::new();
-                hasher.write_u64(cx.graph.nodes[node.0].initial);
-                let mut trivial_skip = true;
-                for &Child {
-                    index,
-                    cutoff,
-                    step_kind,
-                } in cx.graph.nodes[node.0].children.iter()
-                {
-                    let current = Res::from_u64(hasher.finish());
-                    if cutoff.applies(current) {
-                        if !trivial_skip {
-                            cx.cost.set(cx.cost.get() + 1);
-                            tracing::debug!(?index, "skip nested");
-                        } else {
-                            unreachable!()
-                        }
-                    } else {
-                        trivial_skip = false;
-                        let result = evaluate_canonical_goal(cx, search_graph, index, step_kind);
-                        hasher.write_u8(result.0);
-                    }
-                }
-
-                Res::from_u64(hasher.finish())
-            },
-        )
-        .1
-}
-
 #[allow(unused)]
 pub(super) fn test_from_seed(
     cost: &Cell<usize>,
@@ -373,10 +361,10 @@ pub(super) fn test_from_seed(
         graph: &Graph::generate(num_nodes, max_children, &roots, &mut rng),
         cache: &Default::default(),
     };
-    let mut search_graph = SearchGraph::new(recursion_limit);
+    let mut search_graph: SearchGraph<CtxtDelegate> = SearchGraph::new(recursion_limit);
 
     for node in roots {
-        evaluate_canonical_goal(cx, &mut search_graph, node, PathKind::Inductive);
+        search_graph.evaluate_goal(cx, node, PathKind::Inductive, &mut ());
         assert!(
             search_graph.is_empty(),
             "not empty search graph: {:?}",
