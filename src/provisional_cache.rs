@@ -1,3 +1,4 @@
+use rand::prelude::SliceRandom;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rustc_type_ir::search_graph::*;
@@ -67,7 +68,7 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
     fn initial_provisional_result(_cx: Ctxt<'a>, kind: PathKind, _input: Index) -> Res {
         match kind {
             PathKind::Coinductive => Res::Yes,
-            PathKind::Unknown => Res::Ambig,
+            PathKind::Unknown | PathKind::ForcedAmbiguity => Res::Ambig,
             PathKind::Inductive => Res::Error,
         }
     }
@@ -114,8 +115,13 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
         if print_candidate {
             cx.cost.set(cx.cost.get() + 5);
         }
-        for (i, Candidate { flipped, children }) in
-            cx.graph.nodes[input.0].candidates.iter().enumerate()
+        for (
+            i,
+            &Candidate {
+                initial_result,
+                ref children,
+            },
+        ) in cx.graph.nodes[input.0].candidates.iter().enumerate()
         {
             let span;
             let _span;
@@ -123,26 +129,26 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
                 span = debug_span!("candidate", ?i);
                 _span = span.enter();
             }
-            let result = children
-                .iter()
-                .fold(Res::Yes, |curr, &(index, step_kind_from_parent)| {
-                    curr.min(
-                        search_graph
-                            .evaluate_goal(cx, index, step_kind_from_parent, &mut ())
-                            .1,
-                    )
-                });
-            let result = if *flipped {
-                debug!("flip result");
-                cx.cost.set(cx.cost.get() + 1);
-                match result {
-                    Res::Yes => Res::Error,
-                    Res::Ambig => Res::Ambig,
-                    Res::Error => Res::Yes,
-                }
-            } else {
-                result
-            };
+
+            let result = children.iter().fold(
+                initial_result,
+                |curr, &(index, flipped, step_kind_from_parent)| {
+                    cx.cost.set(cx.cost.get() + 1);
+                    let mut result = search_graph
+                        .evaluate_goal(cx, index, step_kind_from_parent, &mut ())
+                        .1;
+                    if flipped {
+                        cx.cost.set(cx.cost.get() + 2);
+                        result = match result {
+                            Res::Yes => Res::Error,
+                            Res::Ambig => Res::Ambig,
+                            Res::Error => Res::Yes,
+                        };
+                        debug!(?result, "flip child result");
+                    }
+                    curr.min(result)
+                },
+            );
             debug!(?result);
             success = success.max(result);
         }
@@ -150,10 +156,10 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Candidate {
-    flipped: bool,
-    children: Vec<(Index, PathKind)>,
+    initial_result: Res,
+    children: Vec<(Index, bool, PathKind)>,
 }
 
 #[derive(Debug, Default)]
@@ -181,9 +187,18 @@ impl Graph {
                     candidates: iter::repeat_with(|| {
                         let num_children = rng.gen_range(0..=max_children);
                         Candidate {
-                            flipped: rng.gen(),
+                            initial_result: [Res::Yes, Res::Yes, Res::Ambig, Res::Error]
+                                .choose(rng)
+                                .copied()
+                                .unwrap(),
                             children: iter::repeat_with(|| {
-                                (Index(rng.gen_range(0..num_nodes)), random_path_kind(rng))
+                                let flipped = rng.gen();
+                                let path_kind = if flipped {
+                                    PathKind::ForcedAmbiguity
+                                } else {
+                                    random_path_kind(rng)
+                                };
+                                (Index(rng.gen_range(0..num_nodes)), flipped, path_kind)
                             })
                             .take(num_children)
                             .collect(),
@@ -203,7 +218,7 @@ impl Graph {
                 let mut has_changed = false;
                 for i in 0..num_nodes {
                     if reached[i] {
-                        for (nested, _source) in graph.nodes[i]
+                        for (nested, _flipped, _source) in graph.nodes[i]
                             .candidates
                             .iter()
                             .flat_map(|c| c.children.iter())
@@ -235,7 +250,7 @@ impl Graph {
                 continue;
             }
             by_occurance.push(value);
-            for &(nested, _) in self.nodes[value.0]
+            for &(nested, _, _) in self.nodes[value.0]
                 .candidates
                 .iter()
                 .flat_map(|c| c.children.iter())
@@ -248,7 +263,9 @@ impl Graph {
         let mut nodes = vec![];
         for &i in &by_occurance {
             let Node { mut candidates } = mem::take(&mut self.nodes[i.0]);
-            for (index, _source) in candidates.iter_mut().flat_map(|c| c.children.iter_mut()) {
+            for (index, _flipped, _source) in
+                candidates.iter_mut().flat_map(|c| c.children.iter_mut())
+            {
                 *index = Index(by_occurance.iter().position(|&i| i == *index).unwrap());
             }
             nodes.push(Node { candidates });
@@ -280,13 +297,14 @@ pub(super) fn test_from_seed(
         graph,
         cache: &Default::default(),
     };
-    let mut search_graph: SearchGraph<CtxtDelegate<false>> = SearchGraph::new(recursion_limit);
+    let mut search_graph: SearchGraph<CtxtDelegate<true>> = SearchGraph::new(recursion_limit);
     for root in roots {
         let res = search_graph
             .evaluate_goal(cx, root, PathKind::Inductive, &mut ())
             .1;
         match (res, expected(num_nodes, graph, root)) {
-            (Res::Yes, Res::Yes) | (Res::Ambig, _) | (Res::Error, Res::Error) => {}
+            (Res::Yes, Res::Yes) | (Res::Ambig, _) | (_, Res::Ambig) | (Res::Error, Res::Error) => {
+            }
             (res, exp) => panic!("res: {res:?}, expected: {exp:?}"),
         }
         assert!(search_graph.is_empty());

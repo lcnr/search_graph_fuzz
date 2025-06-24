@@ -86,7 +86,7 @@ impl<'a> Delegate for CtxtDelegate<'a> {
     fn initial_provisional_result(_cx: Ctxt<'a>, kind: PathKind, _input: Index) -> Res {
         match kind {
             PathKind::Coinductive => Res(0),
-            PathKind::Unknown => Res(10),
+            PathKind::Unknown | PathKind::ForcedAmbiguity => Res(10),
             PathKind::Inductive => Res(15),
         }
     }
