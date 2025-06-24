@@ -302,10 +302,14 @@ pub(super) fn test_from_seed(
         let res = search_graph
             .evaluate_goal(cx, root, PathKind::Inductive, &mut ())
             .1;
-        match (res, expected(num_nodes, graph, root)) {
-            (Res::Yes, Res::Yes) | (Res::Ambig, _) | (_, Res::Ambig) | (Res::Error, Res::Error) => {
+        match res {
+            Res::Ambig => {}
+            Res::Yes | Res::Error => {
+                let exp = expected(num_nodes, graph, root);
+                if exp != res {
+                    panic!("res: {res:?}, expected: {exp:?}")
+                }
             }
-            (res, exp) => panic!("res: {res:?}, expected: {exp:?}"),
         }
         assert!(search_graph.is_empty());
     }
