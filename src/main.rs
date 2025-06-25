@@ -79,7 +79,7 @@ fn do_stuff(
         let min_cost = AtomicUsize::new(usize::MAX);
         let num_tries = AtomicUsize::new(0);
         std::thread::scope(|s| {
-            let num_threads = std::thread::available_parallelism().unwrap().get();
+            let num_threads = std::thread::available_parallelism().unwrap().get() - 1;
             println!("fuzzing search_graph with {num_threads} threads");
             for _ in 0..num_threads {
                 s.spawn(|| {
