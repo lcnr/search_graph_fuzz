@@ -79,7 +79,9 @@ fn do_stuff(
         let min_cost = AtomicUsize::new(usize::MAX);
         let num_tries = AtomicUsize::new(0);
         std::thread::scope(|s| {
-            for _ in 0..128 {
+            let num_threads = std::thread::available_parallelism().unwrap().get();
+            println!("fuzzing search_graph with {num_threads} threads");
+            for _ in 0..num_threads {
                 s.spawn(|| {
                     let mut rng = thread_rng();
                     loop {
@@ -126,5 +128,5 @@ fn do_stuff(
 fn main() {
     //do_stuff(global_cache::test_from_seed, 8, 3, 7, 0);
     // 10410525388587996293
-    do_stuff(provisional_cache::test_from_seed, 4, 2, 5, 7918315368167607166)
+    do_stuff(provisional_cache::test_from_seed, 7, 3, 6, 0)
 }
