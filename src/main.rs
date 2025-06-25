@@ -124,7 +124,7 @@ fn do_stuff(
 }
 
 fn main() {
-    do_stuff(global_cache::test_from_seed, 8, 3, 7, 0);
+    //do_stuff(global_cache::test_from_seed, 8, 3, 7, 0);
     // 10410525388587996293
-    //do_stuff(provisional_cache::test_from_seed, 6, 3, 5, 0)
+    do_stuff(provisional_cache::test_from_seed, 4, 2, 5, 7918315368167607166)
 }
