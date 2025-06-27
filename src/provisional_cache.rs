@@ -149,7 +149,7 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
                     curr.min(result)
                 },
             );
-            debug!(?result);
+            debug!(?initial_result, ?result);
             success = success.max(result);
         }
         success
