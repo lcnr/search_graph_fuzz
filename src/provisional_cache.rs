@@ -50,7 +50,7 @@ impl<'a> Cx for Ctxt<'a> {
 struct CtxtDelegate<'a, const WITH_CACHE: bool>(PhantomData<&'a ()>);
 impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
     type Cx = Ctxt<'a>;
-    const FIXPOINT_STEP_LIMIT: usize = 2;
+    const FIXPOINT_STEP_LIMIT: usize = 3;
 
     const ENABLE_PROVISIONAL_CACHE: bool = WITH_CACHE;
     type ValidationScope = !;
@@ -134,19 +134,23 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
                 initial_result,
                 |curr, &(index, flipped, step_kind_from_parent)| {
                     cx.cost.set(cx.cost.get() + 1);
-                    let mut result = search_graph
-                        .evaluate_goal(cx, index, step_kind_from_parent, &mut ())
-                        .1;
-                    if flipped {
-                        cx.cost.set(cx.cost.get() + 2);
-                        result = match result {
-                            Res::Yes => Res::Error,
-                            Res::Ambig => Res::Ambig,
-                            Res::Error => Res::Yes,
-                        };
-                        debug!(?result, "flip child result");
+                    if curr != Res::Error {
+                        let mut result = search_graph
+                            .evaluate_goal(cx, index, step_kind_from_parent, &mut ())
+                            .1;
+                        if flipped {
+                            cx.cost.set(cx.cost.get() + 2);
+                            result = match result {
+                                Res::Yes => Res::Error,
+                                Res::Ambig => Res::Ambig,
+                                Res::Error => Res::Yes,
+                            };
+                            debug!(?result, "flip child result");
+                        }
+                        curr.min(result)
+                    } else {
+                        Res::Error
                     }
-                    curr.min(result)
                 },
             );
             debug!(?initial_result, ?result);
@@ -187,7 +191,7 @@ impl Graph {
                     candidates: iter::repeat_with(|| {
                         let num_children = rng.gen_range(0..=max_children);
                         Candidate {
-                            initial_result: [Res::Yes, Res::Yes, Res::Ambig, Res::Error]
+                            initial_result: [Res::Yes, Res::Yes, Res::Ambig]
                                 .choose(rng)
                                 .copied()
                                 .unwrap(),
