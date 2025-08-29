@@ -334,7 +334,7 @@ pub(super) fn test_from_seed(
         match res {
             Res::Ambig | Res::Yes | Res::Error => {
                 let exp = expected(num_nodes, graph, root);
-                if exp == res {
+                if exp != res {
                     panic!("res: {res:?}, expected: {exp:?}")
                 }
             }
