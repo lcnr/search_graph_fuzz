@@ -145,10 +145,6 @@ fn main() {
     use provisional_cache::Res::*;
     use provisional_cache::{Candidate, Graph, Node};
     use PathKind::*;
-    "
-        A :- maybe(B) ∧ unknown(E)
-        B :- not(B) ∧ coinductive(C)
-    ";
     with_tracing_logs(|| {
         provisional_cache::test_graph(
             &Cell::new(0),
