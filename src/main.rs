@@ -7,6 +7,8 @@ use std::io::Write as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{self, AtomicUsize};
 
+use crate::provisional_cache::test_graph;
+
 mod global_cache;
 mod provisional_cache;
 
@@ -31,7 +33,7 @@ fn random_path_kind(rng: &mut impl Rng) -> PathKind {
     }
 }
 
-/// Run an action with a tracing log subscriber. The logging level is loaded
+/// Run an action with B tracing log subscriber. The logging level is loaded
 /// from `RUST_LOG`. The `formality_macro::test` expansion uses this to enable logs.
 pub fn with_tracing_logs<T>(action: impl FnOnce() -> T) -> T {
     use std::io::Write;
@@ -126,7 +128,72 @@ fn do_stuff(
 }
 
 fn main() {
-    //do_stuff(global_cache::test_from_seed, 8, 3, 7, 0);
+    // do_stuff(global_cache::test_from_seed, 8, 3, 7, 0);
     // 4 3 6 2273137447480269728
-    do_stuff(provisional_cache::test_from_seed, 8, 2, 8, 5441691759824805846)
+    do_stuff(
+        provisional_cache::test_from_seed,
+        6,
+        3,
+        8,
+        11512016381977744680,
+    );
+    const A: Index = Index(0);
+    const B: Index = Index(1);
+    const C: Index = Index(2);
+    const D: Index = Index(3);
+    const E: Index = Index(4);
+    use provisional_cache::Res::*;
+    use provisional_cache::{Candidate, Graph, Node};
+    use PathKind::*;
+    "
+        A :- maybe(B) ∧ unknown(E)
+        B :- not(B) ∧ coinductive(C)
+    ";
+    with_tracing_logs(|| {
+        provisional_cache::test_graph(
+            &Cell::new(0),
+            Graph {
+                nodes: vec![
+                    Node {
+                        candidates: vec![Candidate {
+                            initial_result: Yes,
+                            children: vec![(B, true, ForcedAmbiguity), (E, false, Unknown)],
+                        }],
+                    },
+                    Node {
+                        candidates: vec![Candidate {
+                            initial_result: Yes,
+                            children: vec![(B, true, ForcedAmbiguity), (C, false, Coinductive)],
+                        }],
+                    },
+                    Node {
+                        candidates: vec![Candidate {
+                            initial_result: Yes,
+                            children: vec![(D, false, Coinductive)],
+                        }],
+                    },
+                    Node {
+                        candidates: vec![
+                            Candidate {
+                                initial_result: Yes,
+                                children: vec![(A, true, ForcedAmbiguity)],
+                            },
+                            Candidate {
+                                initial_result: Yes,
+                                children: vec![(B, false, Coinductive)],
+                            },
+                        ],
+                    },
+                    Node {
+                        candidates: vec![Candidate {
+                            initial_result: Yes,
+                            children: vec![(A, false, Coinductive), (C, true, ForcedAmbiguity)],
+                        }],
+                    },
+                ],
+            },
+            &[A],
+            8,
+        )
+    });
 }

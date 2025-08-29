@@ -5,6 +5,7 @@ edition = "2021"
 
 [profile.release]
 debug-assertions = true
+debug = "line-tables-only"
 
 [dependencies]
 rustc_type_ir = { default-features = false, path = "../rust/compiler/rustc_type_ir", features = ["nightly"] }

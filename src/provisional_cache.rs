@@ -20,7 +20,7 @@ struct Ctxt<'a> {
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
-enum Res {
+pub enum Res {
     Error,
     Ambig,
     Yes,
@@ -50,7 +50,7 @@ impl<'a> Cx for Ctxt<'a> {
 struct CtxtDelegate<'a, const WITH_CACHE: bool>(PhantomData<&'a ()>);
 impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
     type Cx = Ctxt<'a>;
-    const FIXPOINT_STEP_LIMIT: usize = 3;
+    const FIXPOINT_STEP_LIMIT: usize = 2;
 
     const ENABLE_PROVISIONAL_CACHE: bool = WITH_CACHE;
     type ValidationScope = !;
@@ -135,9 +135,8 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
                 |curr, &(index, flipped, step_kind_from_parent)| {
                     cx.cost.set(cx.cost.get() + 1);
                     if curr != Res::Error {
-                        let mut result = search_graph
-                            .evaluate_goal(cx, index, step_kind_from_parent, &mut ())
-                            .1;
+                        let mut result =
+                            search_graph.evaluate_goal(cx, index, step_kind_from_parent, &mut ());
                         if flipped {
                             cx.cost.set(cx.cost.get() + 2);
                             result = match result {
@@ -161,19 +160,19 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
 }
 
 #[derive(Debug)]
-struct Candidate {
-    initial_result: Res,
-    children: Vec<(Index, bool, PathKind)>,
+pub struct Candidate {
+    pub initial_result: Res,
+    pub children: Vec<(Index, bool, PathKind)>,
 }
 
 #[derive(Debug, Default)]
-struct Node {
-    candidates: Vec<Candidate>,
+pub struct Node {
+    pub candidates: Vec<Candidate>,
 }
 
 #[derive(Debug, Default)]
-struct Graph {
-    nodes: Vec<Node>,
+pub struct Graph {
+    pub nodes: Vec<Node>,
 }
 
 impl Graph {
@@ -279,6 +278,34 @@ impl Graph {
     }
 }
 
+pub(super) fn test_graph(
+    cost: &Cell<usize>,
+    graph: Graph,
+    roots: &[Index],
+    recursion_limit: usize,
+) {
+    let graph = &graph.normalize(roots);
+    let cx = Ctxt {
+        cost,
+        graph: &graph,
+        cache: &Default::default(),
+    };
+    let mut search_graph: SearchGraph<CtxtDelegate<true>> = SearchGraph::new(recursion_limit);
+    for &root in roots {
+        let res = search_graph.evaluate_goal(cx, root, PathKind::Inductive, &mut ());
+        match res {
+            Res::Ambig => {}
+            Res::Yes | Res::Error => {
+                let exp = expected(graph.nodes.len(), graph, root);
+                if exp != res {
+                    panic!("res: {res:?}, expected: {exp:?}")
+                }
+            }
+        }
+        assert!(search_graph.is_empty());
+    }
+}
+
 #[allow(unused)]
 pub(super) fn test_from_seed(
     cost: &Cell<usize>,
@@ -303,14 +330,11 @@ pub(super) fn test_from_seed(
     };
     let mut search_graph: SearchGraph<CtxtDelegate<true>> = SearchGraph::new(recursion_limit);
     for root in roots {
-        let res = search_graph
-            .evaluate_goal(cx, root, PathKind::Inductive, &mut ())
-            .1;
+        let res = search_graph.evaluate_goal(cx, root, PathKind::Inductive, &mut ());
         match res {
-            Res::Ambig => {}
-            Res::Yes | Res::Error => {
+            Res::Ambig | Res::Yes | Res::Error => {
                 let exp = expected(num_nodes, graph, root);
-                if exp != res {
+                if exp == res {
                     panic!("res: {res:?}, expected: {exp:?}")
                 }
             }
@@ -327,7 +351,5 @@ fn expected(recursion_limit: usize, graph: &Graph, node: Index) -> Res {
         cache: &Default::default(),
     };
     let mut search_graph: SearchGraph<CtxtDelegate<false>> = SearchGraph::new(recursion_limit);
-    search_graph
-        .evaluate_goal(cx, node, PathKind::Inductive, &mut ())
-        .1
+    search_graph.evaluate_goal(cx, node, PathKind::Inductive, &mut ())
 }

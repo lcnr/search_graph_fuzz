@@ -148,7 +148,7 @@ impl<'a> Delegate for CtxtDelegate<'a> {
             } else {
                 trivial_skip = false;
                 let result = search_graph.evaluate_goal(cx, index, step_kind, inspect);
-                hasher.write_u8(result.1 .0);
+                hasher.write_u8(result.0);
             }
         }
 
@@ -365,11 +365,7 @@ pub(super) fn test_from_seed(
 
     for node in roots {
         search_graph.evaluate_goal(cx, node, PathKind::Inductive, &mut ());
-        assert!(
-            search_graph.is_empty(),
-            "not empty search graph: {:?}",
-            search_graph.debug_stack()
-        );
+        assert!(search_graph.is_empty(), "not empty search graph",);
         assert!(cx.disable_cache.borrow().stack.is_empty());
     }
 }
