@@ -38,6 +38,8 @@ struct Ctxt<'a> {
 impl<'a> Cx for Ctxt<'a> {
     type Input = Index;
     type Result = Res;
+    type AmbiguityInfo = Res;
+
     type DepNodeIndex = ();
     type Tracked<T: Debug + Clone> = T;
     fn mk_tracked<T: Debug + Clone>(self, value: T, _: ()) -> T {
@@ -52,8 +54,8 @@ impl<'a> Cx for Ctxt<'a> {
     fn with_global_cache<R>(self, f: impl FnOnce(&mut GlobalCache<Self>) -> R) -> R {
         f(&mut *self.cache.borrow_mut())
     }
-    fn evaluation_is_concurrent(&self) -> bool {
-        false
+    fn assert_evaluation_is_concurrent(&self) {
+        panic!("Evaluation is not concurrent");
     }
 }
 
@@ -86,30 +88,41 @@ impl<'a> Delegate for CtxtDelegate<'a> {
     fn initial_provisional_result(_cx: Ctxt<'a>, kind: PathKind, _input: Index) -> Res {
         match kind {
             PathKind::Coinductive => Res(0),
-            PathKind::Unknown | PathKind::ForcedAmbiguity => Res(10),
+            PathKind::Unknown => Res(10),
+            PathKind::ForcedAmbiguity => Res(11),
             PathKind::Inductive => Res(15),
         }
     }
 
-    fn is_initial_provisional_result(
+    fn is_initial_provisional_result(result: <Self::Cx as Cx>::Result) -> Option<PathKind> {
+        match result {
+            Res(0) => Some(PathKind::Coinductive),
+            Res(10) => Some(PathKind::Unknown),
+            Res(11) => Some(PathKind::ForcedAmbiguity),
+            Res(15) => Some(PathKind::Inductive),
+            _ => None,
+        }
+    }
+
+    fn stack_overflow_result(
         cx: Self::Cx,
-        kind: PathKind,
         input: <Self::Cx as Cx>::Input,
-        result: <Self::Cx as Cx>::Result,
-    ) -> bool {
-        Self::initial_provisional_result(cx, kind, input) == result
-    }
-
-    fn on_stack_overflow(_cx: Ctxt<'a>, _input: Index, _inspect: &mut ()) -> Res {
-        Res(11)
-    }
-
-    fn on_fixpoint_overflow(_cx: Ctxt<'a>, _input: Index) -> Res {
+    ) -> <Self::Cx as Cx>::Result {
         Res(12)
     }
 
-    fn is_ambiguous_result(result: <Self::Cx as Cx>::Result) -> bool {
-        result.0 >= 10 && result.0 <= 12
+    fn fixpoint_overflow_result(
+        cx: Self::Cx,
+        input: <Self::Cx as Cx>::Input,
+    ) -> <Self::Cx as Cx>::Result {
+        Res(13)
+    }
+
+    fn is_ambiguous_result(result: <Self::Cx as Cx>::Result) -> Option<<Self::Cx as Cx>::AmbiguityInfo> {
+        match result {
+            Res(10..=13) => Some(result),
+            _ => None,
+        }
     }
 
     fn propagate_ambiguity(

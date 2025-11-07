@@ -943,6 +943,7 @@ dependencies = [
 name = "rustc_type_ir"
 version = "0.0.0"
 dependencies = [
+ "arrayvec",
  "bitflags",
  "derive-where",
  "ena",

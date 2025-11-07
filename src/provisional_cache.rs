@@ -28,6 +28,8 @@ pub enum Res {
 impl<'a> Cx for Ctxt<'a> {
     type Input = Index;
     type Result = Res;
+    type AmbiguityInfo = Res;
+
     type DepNodeIndex = ();
     type Tracked<T: Debug + Clone> = T;
     fn mk_tracked<T: Debug + Clone>(self, value: T, _: ()) -> T {
@@ -42,8 +44,8 @@ impl<'a> Cx for Ctxt<'a> {
     fn with_global_cache<R>(self, f: impl FnOnce(&mut GlobalCache<Self>) -> R) -> R {
         f(&mut *self.cache.borrow_mut())
     }
-    fn evaluation_is_concurrent(&self) -> bool {
-        false
+    fn assert_evaluation_is_concurrent(&self) {
+        panic!("Evaluation is not concurrent");
     }
 }
 
@@ -73,25 +75,30 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
         }
     }
 
-    fn is_initial_provisional_result(
-        cx: Self::Cx,
-        kind: PathKind,
-        input: <Self::Cx as Cx>::Input,
-        result: <Self::Cx as Cx>::Result,
-    ) -> bool {
-        Self::initial_provisional_result(cx, kind, input) == result
+    fn is_initial_provisional_result(result: <Self::Cx as Cx>::Result) -> Option<PathKind> {
+        match result {
+            Res::Yes => Some(PathKind::Coinductive),
+            Res::Ambig => Some(PathKind::Unknown),
+            Res::Error => Some(PathKind::Inductive),
+        }
     }
 
-    fn on_stack_overflow(_cx: Ctxt<'a>, _input: Index, _inspect: &mut ()) -> Res {
+    fn stack_overflow_result(
+        _: Self::Cx,
+        _: <Self::Cx as Cx>::Input,
+    ) -> <Self::Cx as Cx>::Result {
         Res::Ambig
     }
 
-    fn on_fixpoint_overflow(_cx: Ctxt<'a>, _input: Index) -> Res {
+    fn fixpoint_overflow_result(
+        _: Self::Cx,
+        _: <Self::Cx as Cx>::Input,
+    ) -> <Self::Cx as Cx>::Result {
         Res::Ambig
     }
 
-    fn is_ambiguous_result(_: <Self::Cx as Cx>::Result) -> bool {
-        false // This fast path is annoying
+    fn is_ambiguous_result(result: <Self::Cx as Cx>::Result) -> Option<<Self::Cx as Cx>::AmbiguityInfo> {
+        None // This fast path is annoying
     }
 
     fn propagate_ambiguity(

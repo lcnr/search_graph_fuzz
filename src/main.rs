@@ -135,7 +135,7 @@ fn main() {
         6,
         3,
         8,
-        11512016381977744680,
+        0,
     );
     const A: Index = Index(0);
     const B: Index = Index(1);
