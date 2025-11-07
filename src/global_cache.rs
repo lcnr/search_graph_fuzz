@@ -3,6 +3,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rustc_type_ir::search_graph::*;
 use rustc_type_ir::solve::GoalSource;
+use tracing::debug;
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::fmt::Write;
@@ -62,7 +63,7 @@ impl<'a> Cx for Ctxt<'a> {
 struct CtxtDelegate<'a>(PhantomData<&'a ()>);
 impl<'a> Delegate for CtxtDelegate<'a> {
     type Cx = Ctxt<'a>;
-    const FIXPOINT_STEP_LIMIT: usize = 2;
+    const FIXPOINT_STEP_LIMIT: usize = 3;
     const ENABLE_PROVISIONAL_CACHE: bool = true;
     type ValidationScope = ValidationScope<'a>;
     fn enter_validation_scope(
@@ -115,12 +116,12 @@ impl<'a> Delegate for CtxtDelegate<'a> {
         cx: Self::Cx,
         input: <Self::Cx as Cx>::Input,
     ) -> <Self::Cx as Cx>::Result {
-        Res(13)
+        Res(10)
     }
 
     fn is_ambiguous_result(result: <Self::Cx as Cx>::Result) -> Option<<Self::Cx as Cx>::AmbiguityInfo> {
         match result {
-            Res(10..=13) => Some(result),
+            Res(13) => Some(result),
             _ => None,
         }
     }
@@ -143,23 +144,26 @@ impl<'a> Delegate for CtxtDelegate<'a> {
             .set(cx.cost.get() + 5 + search_graph.debug_current_depth());
         let mut hasher = DefaultHasher::new();
         hasher.write_u64(cx.graph.nodes[input.0].initial);
-        let mut trivial_skip = true;
         for &Child {
             index,
             cutoff,
+            ignore_cutoff,
             step_kind,
         } in cx.graph.nodes[input.0].children.iter()
         {
             let current = Res::from_u64(hasher.finish());
             if cutoff.applies(current) {
-                if !trivial_skip {
-                    cx.cost.set(cx.cost.get() + 1);
-                    tracing::debug!(?index, "skip nested");
-                } else {
-                    unreachable!()
-                }
+                cx.cost.set(cx.cost.get() + 1);
+                tracing::debug!(?index, "skip nested");
+            } else if ignore_cutoff.applies(current) {
+                cx.cost.set(cx.cost.get() + 1);
+                search_graph.enter_single_candidate();
+                let result = search_graph.evaluate_goal(cx, index, step_kind, inspect);
+                hasher.write_u8(result.0);
+                let head_usages = search_graph.finish_single_candidate();
+                tracing::debug!("ignore candidate");
+                search_graph.ignore_candidate_head_usages(head_usages);
             } else {
-                trivial_skip = false;
                 let result = search_graph.evaluate_goal(cx, index, step_kind, inspect);
                 hasher.write_u8(result.0);
             }
@@ -227,6 +231,7 @@ impl Distribution<Cutoff> for Standard {
 struct Child {
     index: Index,
     cutoff: Cutoff,
+    ignore_cutoff: Cutoff,
     step_kind: PathKind,
 }
 
@@ -257,6 +262,7 @@ impl Graph {
                     children: iter::repeat_with(|| Child {
                         index: Index(rng.gen_range(0..num_nodes)),
                         cutoff: rng.gen(),
+                        ignore_cutoff: rng.gen(),
                         step_kind: crate::random_path_kind(rng),
                     })
                     .take(num_children)
@@ -302,6 +308,7 @@ impl Graph {
             while let Some(&Child {
                 index: _,
                 cutoff,
+                ignore_cutoff: _,
                 step_kind: _,
             }) = node.children.first()
             {
@@ -336,6 +343,7 @@ impl Graph {
             for Child {
                 index,
                 cutoff: _,
+                ignore_cutoff: _,
                 step_kind: _,
             } in children.iter_mut()
             {
@@ -367,11 +375,12 @@ pub(super) fn test_from_seed(
     let roots = iter::once(Index(0))
         .chain(iter::repeat_with(|| Index(rng.gen_range(0..num_nodes))).take(num_root_goals))
         .collect::<Vec<_>>();
-
+    let graph = &Graph::generate(num_nodes, max_children, &roots, &mut rng);
+    debug!(?graph);
     let cx = Ctxt {
         cost,
         disable_cache: &RefCell::new(disable_cache),
-        graph: &Graph::generate(num_nodes, max_children, &roots, &mut rng),
+        graph,
         cache: &Default::default(),
     };
     let mut search_graph: SearchGraph<CtxtDelegate> = SearchGraph::new(recursion_limit);
