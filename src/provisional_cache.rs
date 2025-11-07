@@ -83,10 +83,7 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
         }
     }
 
-    fn stack_overflow_result(
-        _: Self::Cx,
-        _: <Self::Cx as Cx>::Input,
-    ) -> <Self::Cx as Cx>::Result {
+    fn stack_overflow_result(_: Self::Cx, _: <Self::Cx as Cx>::Input) -> <Self::Cx as Cx>::Result {
         Res::Ambig
     }
 
@@ -97,7 +94,9 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
         Res::Ambig
     }
 
-    fn is_ambiguous_result(result: <Self::Cx as Cx>::Result) -> Option<<Self::Cx as Cx>::AmbiguityInfo> {
+    fn is_ambiguous_result(
+        result: <Self::Cx as Cx>::Result,
+    ) -> Option<<Self::Cx as Cx>::AmbiguityInfo> {
         None // This fast path is annoying
     }
 

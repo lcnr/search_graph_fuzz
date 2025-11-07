@@ -3,7 +3,6 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use rustc_type_ir::search_graph::*;
 use rustc_type_ir::solve::GoalSource;
-use tracing::debug;
 use std::cell::{Cell, RefCell};
 use std::fmt::Debug;
 use std::fmt::Write;
@@ -12,6 +11,7 @@ use std::hash::Hasher;
 use std::iter::{self};
 use std::marker::PhantomData;
 use std::mem;
+use tracing::debug;
 
 struct DisableCache {
     rng: SmallRng,
@@ -63,7 +63,7 @@ impl<'a> Cx for Ctxt<'a> {
 struct CtxtDelegate<'a>(PhantomData<&'a ()>);
 impl<'a> Delegate for CtxtDelegate<'a> {
     type Cx = Ctxt<'a>;
-    const FIXPOINT_STEP_LIMIT: usize = 3;
+    const FIXPOINT_STEP_LIMIT: usize = 2;
     const ENABLE_PROVISIONAL_CACHE: bool = true;
     type ValidationScope = ValidationScope<'a>;
     fn enter_validation_scope(
@@ -119,7 +119,9 @@ impl<'a> Delegate for CtxtDelegate<'a> {
         Res(10)
     }
 
-    fn is_ambiguous_result(result: <Self::Cx as Cx>::Result) -> Option<<Self::Cx as Cx>::AmbiguityInfo> {
+    fn is_ambiguous_result(
+        result: <Self::Cx as Cx>::Result,
+    ) -> Option<<Self::Cx as Cx>::AmbiguityInfo> {
         match result {
             Res(13) => Some(result),
             _ => None,
@@ -154,14 +156,13 @@ impl<'a> Delegate for CtxtDelegate<'a> {
             let current = Res::from_u64(hasher.finish());
             if cutoff.applies(current) {
                 cx.cost.set(cx.cost.get() + 1);
-                tracing::debug!(?index, "skip nested");
+                debug!(?index, "skip nested");
             } else if ignore_cutoff.applies(current) {
                 cx.cost.set(cx.cost.get() + 1);
                 search_graph.enter_single_candidate();
-                let result = search_graph.evaluate_goal(cx, index, step_kind, inspect);
-                hasher.write_u8(result.0);
+                let _result = search_graph.evaluate_goal(cx, index, step_kind, inspect);
                 let head_usages = search_graph.finish_single_candidate();
-                tracing::debug!("ignore candidate");
+                debug!("ignore candidate");
                 search_graph.ignore_candidate_head_usages(head_usages);
             } else {
                 let result = search_graph.evaluate_goal(cx, index, step_kind, inspect);

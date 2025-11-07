@@ -6,6 +6,7 @@ use std::fmt::Write;
 use std::io::Write as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{self, AtomicUsize};
+use tracing::level_filters::LevelFilter;
 
 use crate::provisional_cache::test_graph;
 
@@ -60,12 +61,14 @@ pub fn with_tracing_logs<T>(action: impl FnOnce() -> T) -> T {
         }
     }
 
-    let subscriber = Registry::default().with(
-        HierarchicalLayer::new(2)
-            .with_ansi(false)
-            .with_timer(())
-            .with_writer(|| Writer),
-    );
+    let subscriber = Registry::default()
+        .with(
+            HierarchicalLayer::new(2)
+                .with_ansi(false)
+                .with_timer(())
+                .with_writer(|| Writer),
+        )
+        .with(LevelFilter::DEBUG);
     tracing::subscriber::with_default(subscriber, action)
 }
 
@@ -128,15 +131,9 @@ fn do_stuff(
 }
 
 fn main() {
-    do_stuff(global_cache::test_from_seed, 8, 2, 7, 0);
+    do_stuff(global_cache::test_from_seed, 8, 3, 7, 0);
     // 4 3 6 2273137447480269728
-    do_stuff(
-        provisional_cache::test_from_seed,
-        6,
-        3,
-        8,
-        0,
-    );
+    do_stuff(provisional_cache::test_from_seed, 6, 3, 8, 0);
     const A: Index = Index(0);
     const B: Index = Index(1);
     const C: Index = Index(2);
