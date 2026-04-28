@@ -39,7 +39,7 @@ struct Ctxt<'a> {
 impl<'a> Cx for Ctxt<'a> {
     type Input = Index;
     type Result = Res;
-    type AmbiguityInfo = Res;
+    type AmbiguityKind = Res;
 
     type DepNodeIndex = ();
     type Tracked<T: Debug + Clone> = T;
@@ -112,6 +112,7 @@ impl<'a> Delegate for CtxtDelegate<'a> {
         Res(12)
     }
 
+    const FIXPOINT_OVERFLOW_AMBIGUITY_KIND: <Self::Cx as Cx>::AmbiguityKind = Res(10);
     fn fixpoint_overflow_result(
         cx: Self::Cx,
         input: <Self::Cx as Cx>::Input,
@@ -121,19 +122,11 @@ impl<'a> Delegate for CtxtDelegate<'a> {
 
     fn is_ambiguous_result(
         result: <Self::Cx as Cx>::Result,
-    ) -> Option<<Self::Cx as Cx>::AmbiguityInfo> {
+    ) -> Option<<Self::Cx as Cx>::AmbiguityKind> {
         match result {
             Res(13) => Some(result),
             _ => None,
         }
-    }
-
-    fn propagate_ambiguity(
-        _: Self::Cx,
-        _: <Self::Cx as Cx>::Input,
-        from_result: <Self::Cx as Cx>::Result,
-    ) -> <Self::Cx as Cx>::Result {
-        from_result
     }
 
     fn compute_goal(

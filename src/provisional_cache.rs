@@ -28,7 +28,7 @@ pub enum Res {
 impl<'a> Cx for Ctxt<'a> {
     type Input = Index;
     type Result = Res;
-    type AmbiguityInfo = Res;
+    type AmbiguityKind = Res;
 
     type DepNodeIndex = ();
     type Tracked<T: Debug + Clone> = T;
@@ -87,6 +87,7 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
         Res::Ambig
     }
 
+    const FIXPOINT_OVERFLOW_AMBIGUITY_KIND: <Self::Cx as Cx>::AmbiguityKind = Res::Ambig;
     fn fixpoint_overflow_result(
         _: Self::Cx,
         _: <Self::Cx as Cx>::Input,
@@ -96,16 +97,8 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
 
     fn is_ambiguous_result(
         result: <Self::Cx as Cx>::Result,
-    ) -> Option<<Self::Cx as Cx>::AmbiguityInfo> {
+    ) -> Option<<Self::Cx as Cx>::AmbiguityKind> {
         None // This fast path is annoying
-    }
-
-    fn propagate_ambiguity(
-        _: Self::Cx,
-        _: <Self::Cx as Cx>::Input,
-        from_result: <Self::Cx as Cx>::Result,
-    ) -> <Self::Cx as Cx>::Result {
-        from_result
     }
 
     fn compute_goal(
