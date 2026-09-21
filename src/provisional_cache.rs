@@ -135,7 +135,7 @@ impl<'a, const WITH_CACHE: bool> Delegate for CtxtDelegate<'a, WITH_CACHE> {
                     cx.cost.set(cx.cost.get() + 1);
                     if curr != Res::Error {
                         let mut result =
-                            search_graph.evaluate_goal(cx, index, step_kind_from_parent, &mut ());
+                            search_graph.evaluate_goal(cx, index, step_kind_from_parent, LowerAvailableDepth::Yes,&mut ());
                         if flipped {
                             cx.cost.set(cx.cost.get() + 2);
                             result = match result {
@@ -291,7 +291,13 @@ pub(super) fn test_graph(
     };
     let mut search_graph: SearchGraph<CtxtDelegate<true>> = SearchGraph::new(recursion_limit);
     for &root in roots {
-        let res = search_graph.evaluate_goal(cx, root, PathKind::Inductive, &mut ());
+        let res = search_graph.evaluate_goal(
+            cx,
+            root,
+            PathKind::Inductive,
+            LowerAvailableDepth::Yes,
+            &mut (),
+        );
         match res {
             Res::Ambig => {}
             Res::Yes | Res::Error => {
@@ -329,7 +335,13 @@ pub(super) fn test_from_seed(
     };
     let mut search_graph: SearchGraph<CtxtDelegate<true>> = SearchGraph::new(recursion_limit);
     for root in roots {
-        let res = search_graph.evaluate_goal(cx, root, PathKind::Inductive, &mut ());
+        let res = search_graph.evaluate_goal(
+            cx,
+            root,
+            PathKind::Inductive,
+            LowerAvailableDepth::Yes,
+            &mut (),
+        );
         match res {
             Res::Ambig | Res::Yes | Res::Error => {
                 let exp = expected(num_nodes, graph, root);
@@ -350,5 +362,11 @@ fn expected(recursion_limit: usize, graph: &Graph, node: Index) -> Res {
         cache: &Default::default(),
     };
     let mut search_graph: SearchGraph<CtxtDelegate<false>> = SearchGraph::new(recursion_limit);
-    search_graph.evaluate_goal(cx, node, PathKind::Inductive, &mut ())
+    search_graph.evaluate_goal(
+        cx,
+        node,
+        PathKind::Inductive,
+        LowerAvailableDepth::Yes,
+        &mut (),
+    )
 }

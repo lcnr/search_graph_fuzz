@@ -131,7 +131,7 @@ fn do_stuff(
 }
 
 fn main() {
-    do_stuff(global_cache::test_from_seed, 8, 3, 7, 0);
+    do_stuff(global_cache::test_from_seed, 2, 3, 1, 1138100871547992226);
     // 4 3 6 2273137447480269728
     do_stuff(provisional_cache::test_from_seed, 6, 3, 8, 0);
     const A: Index = Index(0);

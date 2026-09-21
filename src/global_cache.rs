@@ -153,12 +153,24 @@ impl<'a> Delegate for CtxtDelegate<'a> {
             } else if ignore_cutoff.applies(current) {
                 cx.cost.set(cx.cost.get() + 1);
                 search_graph.enter_single_candidate();
-                let _result = search_graph.evaluate_goal(cx, index, step_kind, inspect);
+                let _result = search_graph.evaluate_goal(
+                    cx,
+                    index,
+                    step_kind,
+                    LowerAvailableDepth::Yes,
+                    inspect,
+                );
                 let head_usages = search_graph.finish_single_candidate();
                 debug!("ignore candidate");
                 search_graph.ignore_candidate_head_usages(head_usages);
             } else {
-                let result = search_graph.evaluate_goal(cx, index, step_kind, inspect);
+                let result = search_graph.evaluate_goal(
+                    cx,
+                    index,
+                    step_kind,
+                    LowerAvailableDepth::Yes,
+                    inspect,
+                );
                 hasher.write_u8(result.0);
             }
         }
@@ -380,7 +392,13 @@ pub(super) fn test_from_seed(
     let mut search_graph: SearchGraph<CtxtDelegate> = SearchGraph::new(recursion_limit);
 
     for node in roots {
-        search_graph.evaluate_goal(cx, node, PathKind::Inductive, &mut ());
+        search_graph.evaluate_goal(
+            cx,
+            node,
+            PathKind::Inductive,
+            LowerAvailableDepth::Yes,
+            &mut (),
+        );
         assert!(search_graph.is_empty(), "not empty search graph",);
         assert!(cx.disable_cache.borrow().stack.is_empty());
     }
